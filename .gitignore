@@ -1,0 +1,13 @@
+# venv & env
+venv/
+.env
+.env.*
+# logs
+logs/
+*.log
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+# Misc
+.DS_Store
