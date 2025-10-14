@@ -1,16 +1,17 @@
-
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from ..models import get_wallet, list_user_addresses
 from ..config import MIN_WITHDRAW_USDT, WITHDRAW_FEE_FIXED
 from ..logger import withdraw_logger
+from .common import fmt_amount
 
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     wallet = await get_wallet(u.id)
     bal = wallet["usdt_trc20_balance"] if wallet else 0.0
-    text = (f"账户ID：\n{u.id}\n\nUSDT-trc20 -- 当前余额: {bal} U\n提示: 最小提款金额: {int(MIN_WITHDRAW_USDT)}U\n手续费: 0% +{int(WITHDRAW_FEE_FIXED)}U\n")
-    if bal < MIN_WITHDRAW_USDT + WITHDRAW_FEE_FIXED:
+    text = (f"账户ID：\n{u.id}\n\nUSDT-trc20 -- 当前余额: {fmt_amount(bal)} U\n"
+            f"提示: 最小提款金额: {fmt_amount(MIN_WITHDRAW_USDT)} U\n手续费: 0% + {fmt_amount(WITHDRAW_FEE_FIXED)} U\n")
+    if float(bal) < MIN_WITHDRAW_USDT + WITHDRAW_FEE_FIXED:
         text += "\n余额不足提现最低要求!"
         await update.message.reply_text(text); return
 

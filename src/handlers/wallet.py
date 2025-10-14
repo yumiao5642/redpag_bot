@@ -1,13 +1,13 @@
-
 from telegram import Update
 from telegram.ext import ContextTypes
 from ..models import get_wallet
 from ..keyboards import WALLET_MENU
+from .common import fmt_amount
 
 async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     wallet = await get_wallet(u.id)
-    bal = wallet["usdt_trc20_balance"] if wallet else 0
+    bal = fmt_amount(wallet["usdt_trc20_balance"] if wallet else 0)
     addr = wallet.get("tron_address") if wallet else "-"
     text = (
         f"账户ID： {u.id}\n\n"
