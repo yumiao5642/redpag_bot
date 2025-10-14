@@ -1,0 +1,446 @@
+diff --git a/src/keyboards.py b/src/keyboards.py
+index 7a1b9de..c1b9aa1 100644
+--- a/src/keyboards.py
++++ b/src/keyboards.py
+@@ -1,33 +1,51 @@
+ from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+ 
+-MAIN_MENU = ReplyKeyboardMarkup([
+-    [KeyboardButton("一、我的钱包")],
+-    [KeyboardButton("二、汇率查询"), KeyboardButton("三、地址查询")],
+-    [KeyboardButton("四、联系客服"), KeyboardButton("五、设置密码/修改密码")]
+-], resize_keyboard=True)
++MAIN_MENU = ReplyKeyboardMarkup([
++    [KeyboardButton("💰 我的钱包")],
++    [KeyboardButton("💱 汇率查询"), KeyboardButton("🧭 地址查询")],
++    [KeyboardButton("🆘 联系客服"), KeyboardButton("🔐 设置密码/修改密码")]
++], resize_keyboard=True)
+ 
+-WALLET_MENU = ReplyKeyboardMarkup([
+-    [KeyboardButton("1、红包"), KeyboardButton("2、充值")],
+-    [KeyboardButton("3、提现"), KeyboardButton("4、资金明细")],
+-    [KeyboardButton("5、常用地址")],
+-    [KeyboardButton("返回主菜单")]
+-], resize_keyboard=True)
++WALLET_MENU = ReplyKeyboardMarkup([
++    [KeyboardButton("🧧 红包"), KeyboardButton("➕ 充值")],
++    [KeyboardButton("💸 提现"), KeyboardButton("📒 资金明细")],
++    [KeyboardButton("📎 常用地址")],
++    [KeyboardButton("⬅️ 返回主菜单")]
++], resize_keyboard=True)
+ 
+ def redpacket_inline_menu(rp_id: int):
+     return InlineKeyboardMarkup([[
+         InlineKeyboardButton("🧧 立即领取", callback_data=f"rp_claim:{rp_id}")
+     ],[
+         InlineKeyboardButton("查看详情", callback_data=f"rp_detail:{rp_id}")
+     ]])
+ 
+-def redpacket_create_menu(rp_id: int, rp_type: str):
++def _type_row(rp_id: int, rp_type: str):
++    def _btn(t, label):
++        hand = "👉 " if t == rp_type else ""
++        return InlineKeyboardButton(f"{hand}{label}", callback_data=f"rp_type:{rp_id}:{t}")
++    return [
++        _btn("random", "随机"),
++        _btn("average", "平均"),
++        _btn("exclusive", "专属"),
++    ]
++
++def redpacket_create_menu(rp_id: int, rp_type: str):
+     if rp_type in ("random", "average"):
+         row1 = [
+             InlineKeyboardButton("设置红包数量", callback_data=f"rp_set_count:{rp_id}"),
+             InlineKeyboardButton("设置红包金额", callback_data=f"rp_set_amount:{rp_id}")
+         ]
+     else:  # exclusive
+         row1 = [
+             InlineKeyboardButton("设置专属对象", callback_data=f"rp_set_exclusive:{rp_id}"),
+             InlineKeyboardButton("设置红包金额", callback_data=f"rp_set_amount:{rp_id}")
+         ]
+     row2 = [
+         InlineKeyboardButton("设置封面", callback_data=f"rp_set_cover:{rp_id}"),
+         InlineKeyboardButton("确认支付", callback_data=f"rp_pay:{rp_id}")
+     ]
+-    return InlineKeyboardMarkup([row1, row2])
++    # 顶部新增“类型切换”行
++    return InlineKeyboardMarkup([_type_row(rp_id, rp_type), row1, row2])
+diff --git a/src/handlers/common.py b/src/handlers/common.py
+index 5a0e4e2..19d3e2a 100644
+--- a/src/handlers/common.py
++++ b/src/handlers/common.py
+@@ -1,14 +1,21 @@
+ from telegram import Update
+ from telegram.ext import ContextTypes
+ from ..models import ensure_user, get_wallet, set_tron_wallet
+ from ..services.tron import generate_address, is_valid_address
+ from ..services.encryption import encrypt_text
+ from ..logger import user_click_logger, app_logger
+ 
++def fmt_amount(x) -> str:
++    try:
++        return f"{float(x):.2f}"
++    except Exception:
++        return str(x)
++
+ async def ensure_user_and_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     u = update.effective_user
+     await ensure_user(u.id, u.username, u.first_name, u.last_name)
+     wallet = await get_wallet(u.id)
+     if not wallet or not wallet.get("tron_address"):
+         # 为新用户生成独立 TRC20 地址（密钥加密存库）
+         addr = generate_address()
+         await set_tron_wallet(u.id, addr.address, encrypt_text(addr.private_key_hex))
+         app_logger.info(f"🔐 为用户 {u.id} 生成 TRON 地址: {addr.address}")
+     user_click_logger.info(f"👆 用户 {u.id} 触发交互：{update.effective_message.text if update.effective_message else 'callback'}")
+diff --git a/src/handlers/start.py b/src/handlers/start.py
+index 0d8572e..b4f2a5a 100644
+--- a/src/handlers/start.py
++++ b/src/handlers/start.py
+@@ -1,16 +1,27 @@
+ from telegram import Update
+ from telegram.ext import ContextTypes
+ from ..keyboards import MAIN_MENU
+ from ..handlers.common import ensure_user_and_wallet
+ 
+-WELCOME = (
+-    "欢迎使用 USDT-TRC20 红包机器人！\n\n"
+-    "主菜单：\n"
+-    "一、我的钱包\n二、汇率查询\n三、地址查询\n四、联系客服\n五、设置密码/修改密码\n\n"
+-    "请点击下方按钮操作。"
+-)
++WELCOME = (
++    "🎉 欢迎使用 *USDT-TRC20 红包机器人* ！\n\n"
++    "我可以帮你：\n"
++    "• 查看钱包余额、充值/提现、账变明细\n"
++    "• 发送红包（随机｜平均｜专属），群内一键领取\n"
++    "• 绑定常用地址，快捷提现\n"
++    "• 汇率查询 & 地址有效性校验\n"
++    "• 设置/修改交易密码\n\n"
++    "👇 请选择下方菜单开始体验。"
++)
+ 
+ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     await ensure_user_and_wallet(update, context)
+-    await update.message.reply_text(WELCOME, reply_markup=MAIN_MENU)
++    await update.message.reply_markdown(WELCOME, reply_markup=MAIN_MENU)
+diff --git a/src/handlers/wallet.py b/src/handlers/wallet.py
+index a85b3e8..a91a9bc 100644
+--- a/src/handlers/wallet.py
++++ b/src/handlers/wallet.py
+@@ -1,15 +1,16 @@
+ from telegram import Update
+ from telegram.ext import ContextTypes
+ from ..models import get_wallet
+ from ..keyboards import WALLET_MENU
++from .common import fmt_amount
+ 
+ async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     u = update.effective_user
+     wallet = await get_wallet(u.id)
+-    bal = wallet["usdt_trc20_balance"] if wallet else 0
++    bal = fmt_amount(wallet["usdt_trc20_balance"] if wallet else 0)
+     addr = wallet.get("tron_address") if wallet else "-"
+     text = (
+-        f"账户ID： {u.id}\n\n"
+-        f"账户余额：\nUSDT-trc20：{bal}\n"
++        f"账户ID： {u.id}\n\n"
++        f"账户余额：\nUSDT-trc20：{bal}\n"
+         f"充值地址（专属）：{addr}\n\n"
+         "请选择功能："
+     )
+diff --git a/src/handlers/recharge.py b/src/handlers/recharge.py
+index 6b1d0a7..6f32d35 100644
+--- a/src/handlers/recharge.py
++++ b/src/handlers/recharge.py
+@@ -1,23 +1,24 @@
+ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+ from telegram.ext import ContextTypes
+ from ..models import create_recharge_order, get_wallet
+ from ..services.qrcode_util import make_qr_png_bytes
+-from ..config import MIN_DEPOSIT_USDT
++from ..config import MIN_DEPOSIT_USDT
+ from ..logger import recharge_logger
+ from datetime import datetime
++from .common import fmt_amount
+ 
+ async def show_recharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     u = update.effective_user
+     wallet = await get_wallet(u.id)
+     addr = wallet.get("tron_address") if wallet else "-"
+     order_id = await create_recharge_order(u.id, addr, None, 15)
+ 
+     # 生成二维码
+     png = make_qr_png_bytes(addr)
+     caption = (
+-        f"🔌 充值地址（USDT-TRC20）：\n{addr}\n\n"
+-        f"订单号: {order_id}\n创建时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n到期时间: 15 分钟后\n\n"
+-        f"充值金额{int(MIN_DEPOSIT_USDT)}U起，请复制或扫描二维码进行充值。充值订单15分钟内有效，如超时请重新点击充值！"
++        f"🔌 充值地址（USDT-TRC20）：\n{addr}\n\n"
++        f"订单号: {order_id}\n创建时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n到期时间: 15 分钟后\n\n"
++        f"充值金额 {fmt_amount(MIN_DEPOSIT_USDT)} U 起，请复制或扫描二维码进行充值。充值订单 15 分钟内有效，如超时请重新点击充值！"
+     )
+     kb = InlineKeyboardMarkup([[InlineKeyboardButton("复制地址", callback_data=f"recharge_copy:{order_id}"),
+                                 InlineKeyboardButton("刷新状态", callback_data=f"recharge_status:{order_id}")]])
+diff --git a/src/handlers/withdraw.py b/src/handlers/withdraw.py
+index 9d7e0e0..6a1f5f2 100644
+--- a/src/handlers/withdraw.py
++++ b/src/handlers/withdraw.py
+@@ -1,24 +1,25 @@
+ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+ from telegram.ext import ContextTypes
+ from ..models import get_wallet, list_user_addresses
+ from ..config import MIN_WITHDRAW_USDT, WITHDRAW_FEE_FIXED
+ from ..logger import withdraw_logger
++from .common import fmt_amount
+ 
+ async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     u = update.effective_user
+     wallet = await get_wallet(u.id)
+-    bal = wallet["usdt_trc20_balance"] if wallet else 0.0
+-    text = (f"账户ID：\n{u.id}\n\nUSDT-trc20 -- 当前余额: {bal} U\n提示: 最小提款金额: {int(MIN_WITHDRAW_USDT)}U\n手续费: 0% +{int(WITHDRAW_FEE_FIXED)}U\n")
+-    if bal < MIN_WITHDRAW_USDT + WITHDRAW_FEE_FIXED:
++    bal = wallet["usdt_trc20_balance"] if wallet else 0.0
++    text = (f"账户ID：\n{u.id}\n\nUSDT-trc20 -- 当前余额: {fmt_amount(bal)} U\n提示: 最小提款金额: {fmt_amount(MIN_WITHDRAW_USDT)} U\n手续费: 0% + {fmt_amount(WITHDRAW_FEE_FIXED)} U\n")
++    if float(bal) < MIN_WITHDRAW_USDT + WITHDRAW_FEE_FIXED:
+         text += "\n余额不足提现最低要求!"
+         await update.message.reply_text(text); return
+ 
+     addrs = await list_user_addresses(u.id)
+     if not addrs:
+         kb = InlineKeyboardMarkup([[InlineKeyboardButton("添加地址", callback_data="addr_add_start")]])
+         await update.message.reply_text(text + "\n无常用钱包地址,请添加绑定:", reply_markup=kb)
+         return
+ 
+     lines = [text, "\n已添加常用地址："]
+     btns = []
+     for a in addrs:
+-        lines.append(f"- {a['alias']}  {a['address']}")
++        lines.append(f"- {a['alias']}  {a['address']}")
+         btns.append([InlineKeyboardButton(f"提到 {a['alias']}", callback_data=f"withdraw_to:{a['id']}")])
+     await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(btns))
+diff --git a/src/handlers/ledger.py b/src/handlers/ledger.py
+index 2f7f7b1..c22a7a5 100644
+--- a/src/handlers/ledger.py
++++ b/src/handlers/ledger.py
+@@ -1,15 +1,16 @@
+ from telegram import Update
+ from telegram.ext import ContextTypes
+ from ..models import list_ledger_recent
++from .common import fmt_amount
+ 
+ async def show_ledger(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     u = update.effective_user
+     rows = await list_ledger_recent(u.id, 10)
+     if not rows:
+         await update.message.reply_text("暂无账变记录。"); return
+     lines = ["最近10笔账变："]
+     for r in rows:
+-        lines.append(f"[{r['created_at']}] {r['change_type']} 金额:{r['amount']} 余额:{r['balance_after']} 备注:{r.get('remark') or ''}")
++        lines.append(f"[{r['created_at']}] {r['change_type']} 金额:{fmt_amount(r['amount'])} 余额:{fmt_amount(r['balance_after'])} 备注:{r.get('remark') or ''}")
+     await update.message.reply_text("\n".join(lines))
+diff --git a/src/handlers/red_packet.py b/src/handlers/red_packet.py
+index 8c1b074..0c1f7f1 100644
+--- a/src/handlers/red_packet.py
++++ b/src/handlers/red_packet.py
+@@ -1,18 +1,19 @@
+ from decimal import Decimal
+ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+ from telegram.ext import ContextTypes
+ from ..models import (
+     list_red_packets, create_red_packet, get_red_packet, save_red_packet_share,
+     list_red_packet_shares, claim_share, add_red_packet_claim, count_claimed,
+-    set_red_packet_status, get_wallet, update_wallet_balance, add_ledger
++    set_red_packet_status, get_wallet, update_wallet_balance, add_ledger
+ )
+ from ..keyboards import redpacket_inline_menu, redpacket_create_menu
+ from ..services.redalgo import split_random, split_average
+ from ..logger import redpacket_logger, app_logger
+ from ..handlers.common import ensure_user_and_wallet
++from ..handlers.common import fmt_amount
++from ..models import execute
+ 
+ def _fmt_rp(r):
+-    return f"ID:{r['id']} | 类型:{r['type']} | 数量:{r['count']} | 总额:{r['total_amount']} | 状态:{r['status']}"
++    return f"ID:{r['id']} | 类型:{r['type']} | 数量:{r['count']} | 总额:{fmt_amount(r['total_amount'])} | 状态:{r['status']}"
+ 
+ async def show_red_packets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     await ensure_user_and_wallet(update, context)
+@@ -23,7 +24,7 @@ async def show_red_packets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     else:
+         lines.append("（暂无）")
+     kb = InlineKeyboardMarkup([[InlineKeyboardButton("根据ID查看详情", callback_data="rp_query:ask")],
+-                               [InlineKeyboardButton("➕ 创建红包", callback_data="rp_new")]])
++                               [InlineKeyboardButton("➕ 创建红包", callback_data="rp_new")]])
+     await update.message.reply_text("\n".join(lines), reply_markup=kb)
+ 
+ async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@@ -34,12 +35,19 @@ async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     if data == "rp_new":
+         # 默认创建随机红包：1份，1U
+         rp_id = await create_red_packet(u.id, "random", 1.0, 1, None, None, None)
+-        await q.message.reply_text(
+-            _compose_create_text("random", 1, 1.0, cover=None),
+-            reply_markup=redpacket_create_menu(rp_id, "random")
+-        )
++        await q.message.reply_text(_compose_create_text("random", 1, 1.0, cover=None),
++                                   reply_markup=redpacket_create_menu(rp_id, "random"))
+         return
+ 
++    if data.startswith("rp_type:"):
++        # 切换红包类型：rp_type:<rp_id>:<random|average|exclusive>
++        _, rp_id_str, new_type = data.split(":")
++        rp_id = int(rp_id_str)
++        await execute("UPDATE red_packets SET type=%s, exclusive_user_id=IF(%s='exclusive',exclusive_user_id,NULL) WHERE id=%s",
++                      (new_type, new_type, rp_id))
++        r = await get_red_packet(rp_id)
++        await q.message.reply_text(_compose_create_text(r["type"], r["count"], r["total_amount"], r.get("cover_text")),
++                                   reply_markup=redpacket_create_menu(rp_id, r["type"]))
++        return
+     if data.startswith("rp_query:ask"):
+         context.user_data["rp_query_waiting"] = True
+         await q.message.reply_text("请输入红包ID：")
+@@ -57,7 +65,8 @@ async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         r = await get_red_packet(rp_id)
+         if not r:
+             await q.message.reply_text("未找到红包。")
+-            return
++            return
+         shares = await list_red_packet_shares(rp_id)
+         claimed = sum(1 for s in shares if s["claimed_by"]) if shares else 0
+-        await q.message.reply_text(
+-            f"🧧 红包详情\nID:{r['id']}\n类型:{r['type']}\n币种:{r['currency']}\n数量:{r['count']}\n金额:{r['total_amount']}\n封面:{r.get('cover_text') or '未设置'}\n专属:{r.get('exclusive_user_id') or '无'}\n状态:{r['status']}\n已领:{claimed}/{r['count']}"
+-        )
++        await q.message.reply_text(
++            f"🧧 红包详情\nID:{r['id']}\n类型:{r['type']}\n币种:{r['currency']}\n数量:{r['count']}\n金额:{fmt_amount(r['total_amount'])}\n封面:{r.get('cover_text') or '未设置'}\n专属:{r.get('exclusive_user_id') or '无'}\n状态:{r['status']}\n已领:{claimed}/{r['count']}"
++        )
+         return
+ 
+@@ -110,27 +119,29 @@ async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         wallet = await get_wallet(u.id)
+         bal = Decimal(str(wallet["usdt_trc20_balance"])) if wallet else Decimal("0")
+         total = Decimal(str(r["total_amount"]))
+         if bal < total:
+             await q.message.reply_text("余额不足，无法支付！请先充值。");
+             return
+ 
+         # 扣款
+         new_bal = bal - total
+         await update_wallet_balance(u.id, float(new_bal))
+         await add_ledger(u.id, "redpacket_send", -float(total), float(bal), float(new_bal), "red_packets", rp_id, "发送红包扣款")
+ 
+         # 拆分
+         if r["type"] == "random":
+             shares = split_random(float(total), int(r["count"]))
+         else:
+             shares = split_average(float(total), int(r["count"]))
+         for i, s in enumerate(shares, 1):
+             await save_red_packet_share(rp_id, i, float(s))
+ 
+         await set_red_packet_status(rp_id, "paid")
+-        redpacket_logger.info(f"💸 用户 {u.id} 成功支付红包 {rp_id}，总额 {total}, 份数 {r['count']}")
++        redpacket_logger.info(f"💸 用户 {u.id} 成功支付红包 {rp_id}，总额 {total}, 份数 {r['count']}")
+ 
+         # 发送到当前聊天
+         cover = r.get("cover_text") or "封面未设置"
+-        await q.message.reply_text(
+-            f"🧧 发送红包\n\n{cover}\n\n--- ☝️ 红包封面 ☝️ ---\n\n类型：[{ '随机' if r['type']=='random' else ('平均' if r['type']=='average' else '专属') }]\n币种：USDT-trc20\n数量：{r['count']}\n金额：{r['total_amount']}\n\n提示：未领取的将在24小时后退款。", 
+-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧧 立即领取", callback_data=f"rp_claim:{rp_id}")],
+-                                               [InlineKeyboardButton("查看详情", callback_data=f"rp_detail:{rp_id}")]])
+-        )
++        type_cn = '随机' if r['type']=='random' else ('平均' if r['type']=='average' else '专属')
++        await q.message.reply_text(
++            f"🧧 发送红包\n\n{cover}\n\n--- ☝️ 红包封面 ☝️ ---\n\n类型：[{type_cn}]（下方可切换）\n币种：USDT-trc20\n数量：{r['count']}\n金额：{fmt_amount(r['total_amount'])}\n\n提示：未领取的将在24小时后退款。", 
++            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧧 立即领取", callback_data=f"rp_claim:{rp_id}")],
++                                               [InlineKeyboardButton("查看详情", callback_data=f"rp_detail:{rp_id}")]])
++        )
+         await set_red_packet_status(rp_id, "sent")
+         return
+ 
+@@ -155,7 +166,7 @@ async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         after = before + amt
+         await update_wallet_balance(update.effective_user.id, float(after))
+         await add_ledger(update.effective_user.id, "redpacket_claim", float(amt), float(before), float(after), "red_packets", rp_id, "领取红包入账")
+         redpacket_logger.info(f"🎉 用户 {update.effective_user.id} 领取红包 {rp_id} 金额 {amt}")
+ 
+         # 私聊到账信息（若在群内点击则会收到私聊）
+         try:
+-            await context.bot.send_message(chat_id=update.effective_user.id, text=f"红包到账：+{amt} USDT-trc20，已入账余额。") 
++            await context.bot.send_message(chat_id=update.effective_user.id, text=f"红包到账：+{fmt_amount(amt)} USDT-trc20，已入账余额。") 
+         except Exception:
+             pass
+-        await q.message.reply_text(f"领取成功，金额：{amt} USDT-trc20！") 
++        await q.message.reply_text(f"领取成功，金额：{fmt_amount(amt)} USDT-trc20！") 
+ 
+         # 完成状态
+         claimed = await count_claimed(rp_id)
+@@ -194,19 +205,24 @@ async def on_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+             cover = s or "未设置"
+ 
+     await update.message.reply_text(
+-        _compose_create_text(curr_type, curr_count, curr_amount, cover=cover if cover!='未设置' else None),
++        _compose_create_text(curr_type, curr_count, curr_amount, cover=cover if cover!='未设置' else None),
+         reply_markup=redpacket_create_menu(rp_id, curr_type)
+     )
+ 
+ def _compose_create_text(rp_type: str, count: int, amount: float, cover=None) -> str:
+     type_cn = {"random":"随机","average":"平均","exclusive":"专属"}.get(rp_type, "随机")
+     cover_line = cover if cover else "封面未设置"
+-    return (f"🧧 发送红包\n\n{cover_line}\n\n--- ☝️ 红包封面 ☝️ ---\n\n"
+-            f"类型：[{type_cn}]\n\n币种：USDT-trc20\n数量：{count}\n金额：{amount}\n\n"
+-            "提示：未领取的将在24小时后退款。\n"
+-            "按钮: 设置红包数量|设置红包金额|设置封面|确认支付")
++    # 在文案里说明可在“下方按钮”切换类型
++    return (f"🧧 发送红包\n\n{cover_line}\n\n--- ☝️ 红包封面 ☝️ ---\n\n"
++            f"类型：[{type_cn}]（下方可切换：随机｜平均｜专属）\n"
++            f"币种：USDT-trc20\n数量：{count}\n金额：{fmt_amount(amount)}\n\n"
++            "提示：未领取的将在24小时后退款。")
+diff --git a/src/main.py b/src/main.py
+index 0e39d1f..e0f3a51 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -22,28 +22,30 @@ from .logger import app_logger
+ 
+ async def on_text_router(update, context):
+     text = (update.message.text or "").strip()
+     if text in ("/start", "start"):
+         return await h_start.start(update, context)
+ 
+     # 主菜单入口
+-    if text.startswith("一、我的钱包"):
++    if text.startswith("💰 我的钱包") or text.startswith("一、我的钱包"):
+         return await h_wallet.show_wallet(update, context)
+-    if text.startswith("二、汇率查询"):
++    if text.startswith("💱 汇率查询") or text.startswith("二、汇率查询"):
+         return await h_fx.show_fx(update, context)
+-    if text.startswith("三、地址查询"):
++    if text.startswith("🧭 地址查询") or text.startswith("三、地址查询"):
+         return await h_addrquery.addr_query(update, context)
+-    if text.startswith("四、联系客服"):
++    if text.startswith("🆘 联系客服") or text.startswith("四、联系客服"):
+         return await h_support.show_support(update, context)
+-    if text.startswith("五、设置密码"):
++    if text.startswith("🔐 设置密码") or text.startswith("五、设置密码"):
+         return await h_password.set_password(update, context)
+ 
+     # 钱包子菜单
+-    if text.startswith("1、红包"):
++    if text.startswith("🧧 红包") or text.startswith("1、红包"):
+         return await h_rp.show_red_packets(update, context)
+-    if text.startswith("2、充值"):
++    if text.startswith("➕ 充值") or text.startswith("2、充值"):
+         return await h_recharge.show_recharge(update, context)
+-    if text.startswith("3、提现"):
++    if text.startswith("💸 提现") or text.startswith("3、提现"):
+         return await h_withdraw.show_withdraw(update, context)
+-    if text.startswith("4、资金明细"):
++    if text.startswith("📒 资金明细") or text.startswith("4、资金明细"):
+         return await h_ledger.show_ledger(update, context)
+-    if text.startswith("5、常用地址"):
++    if text.startswith("📎 常用地址") or text.startswith("5、常用地址"):
+         return await h_addrbook.address_entry(update, context)
+-    if text.startswith("返回主菜单"):
++    if text.startswith("⬅️ 返回主菜单") or text.startswith("返回主菜单"):
+         return await h_start.start(update, context)
+ 
+     # 其他输入流（红包创建、地址绑定、密码设置、地址查询等）
