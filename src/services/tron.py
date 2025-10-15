@@ -107,6 +107,7 @@ async def get_usdt_balance(address: str) -> float:
 async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount: float) -> str:
     """
     将 amount USDT 从 from_addr 转到 to_addr，等待确认，返回 txid
+    如果回执不是 SUCCESS（如 OUT_OF_ENERGY / REVERT 等），直接抛异常，让上层保持 collecting 状态重试。
     """
     async def _call():
         await _limiter.wait()
@@ -118,14 +119,20 @@ async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount:
             tx = (
                 usdt.functions.transfer(to_addr, amt)
                 .with_owner(from_addr)
-                .fee_limit(15_000_000)  # 上限保护；有能量时不会真的花这么多 TRX
+                .fee_limit(15_000_000)
                 .build()
                 .sign(PrivateKey(bytes.fromhex(priv_hex)))
                 .broadcast()
             )
             receipt = tx.wait()
+            # 常见位置：contractResult/receipt/result/ret 等；tronpy 回执结构可能因节点差异略不同
+            result = (receipt.get('receipt') or {}).get('result') or receipt.get('contractRet') or ''
+            result = str(result).upper()
+            if result != 'SUCCESS':
+                raise RuntimeError(f"transfer receipt not SUCCESS: {result}  txid={tx.txid}")
+
             collect_logger.info(
-                f"✅ USDT 转账完成：txid={tx.txid} status={receipt.get('receipt', {}).get('result')}"
+                f"✅ USDT 转账确认成功：txid={tx.txid} result={result}"
             )
             return tx.txid
 
@@ -133,7 +140,6 @@ async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount:
         return await loop.run_in_executor(None, _task)
 
     return await _retry_with_backoff(_call)
-
 
 # ========== 地址校验 ==========
 # 轻量级格式校验：T 开头 + 34 位 Base58 字符（排除 0 O I l）
