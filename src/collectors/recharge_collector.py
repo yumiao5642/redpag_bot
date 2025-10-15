@@ -1,9 +1,9 @@
-import asyncio
+import asyncio, re
 from decimal import Decimal
 from ..db import init_pool, close_pool
 from ..models import (
     list_recharge_waiting, set_recharge_status, get_wallet,
-    update_wallet_balance, add_ledger, execute
+    update_wallet_balance, add_ledger, execute, get_recharge_order
 )
 from ..config import MIN_DEPOSIT_USDT, AGGREGATE_ADDRESS
 from ..logger import collect_logger
@@ -13,11 +13,16 @@ from ..services.encryption import decrypt_text
 
 EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting' AND expire_at <= NOW()"
 
+def _safe_notes(s: str) -> str:
+    # 只保留 汉字、字母、数字、_、- ；其余去掉
+    return re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9_-]", "", s)
+
 async def process_one(order):
     oid = order["id"]; uid = order["user_id"]; addr = order["address"]
+    order_no = order.get("order_no") or str(oid)
     collect_logger.info(f"🔎 扫描订单 {oid} / 用户 {uid} / 地址 {addr}")
 
-    # 1) 检测余额（限速 + 重试在 tron.py 内部）
+    # 1) 检测余额
     bal = await get_usdt_balance(addr)
     collect_logger.info(f"地址 {addr} 余额：{bal:.6f} USDT，阈值 {MIN_DEPOSIT_USDT:.2f} USDT")
     if float(bal) < float(MIN_DEPOSIT_USDT):
@@ -28,9 +33,9 @@ async def process_one(order):
     await set_recharge_status(oid, "collecting", None)
     collect_logger.info(f"🚚 订单 {oid} -> collecting")
 
-    # 3) 为充值地址租用能量（仅 apiKey）
+    # 3) 租能量：备注仅用安全字符
     try:
-        _data = await rent_energy(receive_address=addr, pay_nums=65000, rent_time=1, order_notes=f"order:{oid}")
+        _ = await rent_energy(receive_address=addr, pay_nums=65000, rent_time=1, order_notes=_safe_notes(f"order-{order_no}"))
     except Exception as e:
         collect_logger.error(f"❌ 能量下单失败：{e}；保留 collecting 状态待下轮重试")
         return
@@ -52,7 +57,7 @@ async def process_one(order):
     await set_recharge_status(oid, "verifying", txid)
     collect_logger.info(f"🔁 订单 {oid} -> verifying, txid={txid}")
 
-    # 5) 简化验证：读取余额趋近 0 即认为成功，并入账
+    # 5) 简化验证：余额趋近 0 即视为成功，入账
     try:
         after_bal = await get_usdt_balance(addr)
     except Exception:
@@ -78,7 +83,6 @@ async def main_once():
         orders = await list_recharge_waiting()
         if not orders:
             collect_logger.info("📭 无 waiting 订单"); return
-
         for o in orders:
             try:
                 await process_one(o)
