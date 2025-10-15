@@ -43,6 +43,10 @@ async def _ensure_resources(addr: str, oid: int, order_no: str) -> None:
             await add_energy_rent_log(addr, oid, order_no, rent_order_id=str(order_id), ttl_seconds=3600)
             collect_logger.info(f"⚡ 能量下单成功：订单 {oid}（{order_no}） id={order_id}")
             await asyncio.sleep(int(os.getenv("TRONGAS_ACTIVATION_DELAY", "8")))
+            ok = await _wait_energy_ready(addr, need_energy, timeout=int(os.getenv("TRONGAS_ACTIVATION_DELAY", "30")))
+            if not ok:
+                collect_logger.warning(f"⚠️ 能量租用已下单但未及时生效，当前 energy={get_account_resource(addr)['energy']}")
+
         except Exception as e:
             collect_logger.error(f"❌ 能量下单失败：{e}；稍后重试")
             # 不抛出，继续检查带宽，下一轮会再试
@@ -64,7 +68,19 @@ async def _ensure_resources(addr: str, oid: int, order_no: str) -> None:
                 collect_logger.error(f"❌ TRX 代付失败：{e}；稍后重试")
         else:
             collect_logger.warning(f"⚠️ 带宽不足（{res['bandwidth']} < {need_bw}），且未配置代付账号，可能导致 BANDWIDTH_ERROR")
+    # 代付之后
+    res2 = get_account_resource(addr)
+    collect_logger.info(f"🪙 代付后资源：带宽 {res2['bandwidth']}、能量 {res2['energy']}")
 
+
+async def _wait_energy_ready(addr: str, need: int, timeout: int = 30):
+    end = time.time() + timeout
+    while time.time() < end:
+        res = get_account_resource(addr)
+        if res['energy'] >= need:
+            return True
+        await asyncio.sleep(2)
+    return False
 
 async def _collect_and_book(uid: int, addr: str, oid: int, order_no: str):
     """

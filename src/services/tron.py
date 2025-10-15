@@ -11,7 +11,34 @@ from ..config import (
     TRONGRID_API_KEY, TRONGRID_QPS
 )
 from ..logger import collect_logger
+from tronpy.exceptions import TransactionNotFound
 
+
+
+def wait_tx_committed(txid: str, timeout: int = 45, interval: float = 1.5) -> dict:
+    """
+    轮询查询交易信息，直到返回结果或超时。
+    返回 info 字典；若 info.get('result') == 'FAILED' 则视为失败。
+    """
+    c = _get_client()
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            info = c.get_transaction_info(txid)
+            # TRX 普通转账可能没有 contractRet；出现 'result': 'SUCCESS' 或包含 blockNumber 即可视为成功
+            if info and (info.get("result") == "SUCCESS" or info.get("blockNumber") is not None):
+                return info
+            # 有明确失败
+            if info and info.get("result") == "FAILED":
+                return info
+        except TransactionNotFound as e:
+            last_err = e
+        time.sleep(interval)
+    # 超时也返回最后一次获取到的 info 或抛出
+    if last_err:
+        raise last_err
+    return {}
 
 @dataclass
 class TronAddress:
@@ -72,18 +99,15 @@ def get_account_resource(address: str) -> dict:
     return {'bandwidth': bw, 'energy': en}
 
 def send_trx(priv_hex: str, from_addr: str, to_addr: str, amount_trx: float) -> str:
-    """
-    给 to_addr 转少量 TRX（用于带宽费），返回 txid
-    """
     c = _get_client()
     amt_sun = int(Decimal(str(amount_trx)) * Decimal(1_000_000))
     tx = c.trx.transfer(from_addr, to_addr, amt_sun).build().sign(PrivateKey(bytes.fromhex(priv_hex))).broadcast()
-    receipt = tx.wait()
-    # 简单校验
-    result = (receipt.get('receipt') or {}).get('result') or receipt.get('contractRet') or ''
-    if str(result).upper() != 'SUCCESS':
-        raise RuntimeError(f"TRX topup receipt not SUCCESS: {result} txid={tx.txid}")
-    return tx.txid
+    txid = tx.txid
+    info = wait_tx_committed(txid, timeout=45)
+    # 判定成功：有块号且未标记 FAILED
+    if info and info.get("result") != "FAILED" and info.get("blockNumber") is not None:
+        return txid
+    raise RuntimeError(f"TRX topup not confirmed: {info or 'no-info'} txid={txid}")
 
 def generate_address() -> TronAddress:
     """仅用于占位/初始化，生产上请使用你现有的加密私钥方案"""
@@ -145,7 +169,7 @@ async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount:
             tx = (
                 usdt.functions.transfer(to_addr, amt)
                 .with_owner(from_addr)
-                .fee_limit(15_000_000)
+                .fee_limit(30_000_000)
                 .build()
                 .sign(PrivateKey(bytes.fromhex(priv_hex)))
                 .broadcast()
