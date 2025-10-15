@@ -245,3 +245,26 @@ async def count_claimed(rp_id: int) -> int:
 # 兼容旧代码：有的地方引了 add_red_packet_claim，这里提供空实现避免 ImportError
 async def add_red_packet_claim(*args, **kwargs):
     return 0
+
+# —— 能量租用记录 —— #
+async def has_active_energy_rent(address: str) -> bool:
+    row = await fetchone(
+        "SELECT id FROM energy_rent_logs WHERE address=%s AND status='active' AND expire_at>NOW() ORDER BY id DESC LIMIT 1",
+        (address,),
+    )
+    return bool(row)
+
+async def add_energy_rent_log(address: str, order_id: int, order_no: str,
+                              rent_order_id: str = None, rent_txid: str = None,
+                              ttl_seconds: int = 3600) -> None:
+    await execute(
+        "INSERT INTO energy_rent_logs(address,order_id,order_no,provider,rent_order_id,rent_txid,rented_at,expire_at,status)"
+        " VALUES(%s,%s,%s,'trongas',%s,%s,NOW(),DATE_ADD(NOW(),INTERVAL %s SECOND),'active')",
+        (address, order_id, order_no, rent_order_id, rent_txid, ttl_seconds),
+    )
+
+async def mark_energy_rent_used(address: str) -> None:
+    await execute(
+        "UPDATE energy_rent_logs SET status='used' WHERE address=%s AND status='active'",
+        (address,),
+    )

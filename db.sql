@@ -102,3 +102,35 @@ CREATE TABLE IF NOT EXISTS user_addresses (
   UNIQUE KEY uq_user_addr (user_id, address),
   CONSTRAINT fk_addr_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS energy_rent_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  address VARCHAR(50) NOT NULL,
+  order_id BIGINT NULL,
+  order_no VARCHAR(32) NULL,
+  provider VARCHAR(32) NOT NULL DEFAULT 'trongas',
+  rent_order_id VARCHAR(64) NULL,
+  rent_txid VARCHAR(100) NULL,
+  rented_at DATETIME NOT NULL,
+  expire_at DATETIME NOT NULL,
+  status ENUM('active','used','expired','failed') NOT NULL DEFAULT 'active',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_energy_addr (address, status, expire_at)
+);
+
+ALTER TABLE recharge_orders
+  ADD COLUMN txid VARCHAR(100) NULL AFTER status,
+  ADD COLUMN updated_at DATETIME NULL AFTER expire_at;
+
+-- 扫描 waiting 过期单用到的索引
+CREATE INDEX idx_recharge_waiting ON recharge_orders (status, expire_at);
+
+
+-- 增加来源表名/来源ID（若已存在会报重复，直接忽略提示即可）
+ALTER TABLE ledger
+  ADD COLUMN ref_table VARCHAR(32) NULL AFTER change_type,
+  ADD COLUMN ref_id INT NULL AFTER ref_table;
+
+-- 幂等索引（重复则忽略即可）
+CREATE INDEX idx_ledger_ref ON ledger (change_type, ref_table, ref_id);

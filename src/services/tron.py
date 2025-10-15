@@ -58,6 +58,32 @@ def _get_client() -> Tron:
     )
     return Tron(provider)
 
+def get_account_resource(address: str) -> dict:
+    """
+    返回 {'bandwidth': int, 'energy': int}
+    带宽 = (freeNetLimit - freeNetUsed) + (NetLimit - NetUsed)
+    能量 = (EnergyLimit - EnergyUsed)
+    """
+    c = _get_client()
+    info = c.get_account_resource(address)
+    bw = max(0, int(info.get('freeNetLimit', 0)) - int(info.get('freeNetUsed', 0))) \
+         + max(0, int(info.get('NetLimit', 0)) - int(info.get('NetUsed', 0)))
+    en = max(0, int(info.get('EnergyLimit', 0)) - int(info.get('EnergyUsed', 0)))
+    return {'bandwidth': bw, 'energy': en}
+
+def send_trx(priv_hex: str, from_addr: str, to_addr: str, amount_trx: float) -> str:
+    """
+    给 to_addr 转少量 TRX（用于带宽费），返回 txid
+    """
+    c = _get_client()
+    amt_sun = int(Decimal(str(amount_trx)) * Decimal(1_000_000))
+    tx = c.trx.transfer(from_addr, to_addr, amt_sun).build().sign(PrivateKey(bytes.fromhex(priv_hex))).broadcast()
+    receipt = tx.wait()
+    # 简单校验
+    result = (receipt.get('receipt') or {}).get('result') or receipt.get('contractRet') or ''
+    if str(result).upper() != 'SUCCESS':
+        raise RuntimeError(f"TRX topup receipt not SUCCESS: {result} txid={tx.txid}")
+    return tx.txid
 
 def generate_address() -> TronAddress:
     """仅用于占位/初始化，生产上请使用你现有的加密私钥方案"""

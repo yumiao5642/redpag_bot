@@ -28,4 +28,9 @@ async def rent_energy(receive_address: str, pay_nums: int = 65000, rent_time: in
         raise RuntimeError(msg)
     data = js.get("data") or {}
     collect_logger.info(f"⚡ 能量下单成功：orderId={data.get('orderId')} money={data.get('orderMoney')} TRX")
-    return data
+
+    return {
+        "order_id": data.get("orderId"),
+        "activation_hash": data.get("activationHash"),
+        "hash_list": data.get("hash", []),
+    }
