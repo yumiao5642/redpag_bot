@@ -15,6 +15,14 @@ async def init_pool():
         )
         app_logger.info("✅ MySQL 连接池已初始化")
 
+async def close_pool():
+    global _pool
+    if _pool is not None:
+        _pool.close()
+        await _pool.wait_closed()
+        _pool = None
+        app_logger.info("🛑 MySQL 连接池已关闭")
+
 async def get_conn():
     assert _pool is not None, "MySQL 连接池未初始化"
     return _pool.acquire()

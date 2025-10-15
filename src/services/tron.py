@@ -1,53 +1,52 @@
-
-"""
-TRON 工具封装（占位实现）：
-- 生成地址（主网 Base58 地址）
-- 校验 TRON 地址格式
-- 查询地址 USDT 余额（TODO）
-- 从子地址将 USDT 归集至热钱包（TODO）
-实际链上交互请结合 tronpy 或自建/第三方节点完善，并做好能量/带宽与私钥安全。
-"""
-from typing import Tuple, Optional
-from dataclasses import dataclass
+import asyncio
 from decimal import Decimal
-import re
+from dataclasses import dataclass
+from tronpy import Tron
+from tronpy.keys import PrivateKey
+from ..config import USDT_CONTRACT, TRON_FULLNODE_URL, USDT_DECIMALS
+from ..logger import collect_logger
 
-try:
-    from tronpy import Tron
-    from tronpy.keys import PrivateKey
-except Exception:
-    Tron = None
-    PrivateKey = None
-
-TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")  # 简易校验（Base58，34位，以 T 开头）
+def _get_client() -> Tron:
+    if TRON_FULLNODE_URL:
+        from tronpy.providers import HTTPProvider
+        return Tron(provider=HTTPProvider(TRON_FULLNODE_URL))
+    return Tron()  # 默认主网公共节点
 
 @dataclass
 class TronAddress:
     address: str
-    private_key_hex: str
-
-def is_valid_address(addr: str) -> bool:
-    return bool(TRON_ADDR_RE.match(addr or ""))
+    private_key_hex: str  # 64 hex
 
 def generate_address() -> TronAddress:
-    """生成随机 TRON 地址（本地计算）。"""
-    if PrivateKey is None:
-        # 退化：随机 hex（仅开发环境使用）
-        import os, binascii
-        pk = binascii.hexlify(os.urandom(32)).decode()
-        return TronAddress(address="T" + pk[:33], private_key_hex=pk)
+    # 生产不使用该方法，留给“新用户初始化”占位（你已使用）；真实地址来自加密私钥存储
     pk = PrivateKey.random()
-    addr = pk.public_key.to_base58check_address()
-    return TronAddress(address=addr, private_key_hex=pk.hex())
+    return TronAddress(address=pk.public_key.to_base58check_address(), private_key_hex=pk.hex())
 
-def query_usdt_balance(addr: str) -> Decimal:
-    """查询地址 USDT-TRC20 余额（占位）。
-    实际应调用 USDT 合约的 balanceOf(addr)。
+async def get_usdt_balance(address: str) -> float:
+    def _task():
+        c = _get_client()
+        usdt = c.get_contract(USDT_CONTRACT)
+        raw = usdt.functions.balanceOf(address)
+        return float(Decimal(raw) / (Decimal(10) ** USDT_DECIMALS))
+    return await asyncio.get_running_loop().run_in_executor(None, _task)
+
+async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount: float) -> str:
     """
-    # TODO: 接 tronpy 与合约 ABI，返回实际余额
-    return Decimal("0")
-
-def transfer_usdt_from_child_to_hot(child_privkey_hex: str, to_hot_address: str, amount: Decimal) -> Optional[str]:
-    """从子地址将 USDT 归集到热钱包，返回 txid（占位）。"""
-    # TODO: 实现合约转账；注意能量与手续费；返回交易 ID
-    return None
+    将 amount USDT 从 from_addr 转到 to_addr，等待确认，返回 txid
+    """
+    def _task():
+        c = _get_client()
+        usdt = c.get_contract(USDT_CONTRACT)
+        amt = int(Decimal(str(amount)) * (Decimal(10) ** USDT_DECIMALS))
+        tx = (
+            usdt.functions.transfer(to_addr, amt)
+            .with_owner(from_addr)
+            .fee_limit(15_000_000)    # 15 TRX 上限，能量足时不会消耗这么多
+            .build()
+            .sign(PrivateKey(bytes.fromhex(priv_hex)))
+            .broadcast()
+        )
+        receipt = tx.wait()  # 等待链上确认（抛异常则外层捕获）
+        collect_logger.info(f"✅ USDT 转账完成：txid={tx.txid} status={receipt.get('receipt',{}).get('result')}")
+        return tx.txid
+    return await asyncio.get_running_loop().run_in_executor(None, _task)

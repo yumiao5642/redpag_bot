@@ -109,3 +109,7 @@ async def set_recharge_status(order_id: int, status: str, txid_collect: Optional
 
 async def get_user_by_id(user_id: int):
     return await fetchone("SELECT * FROM users WHERE id=%s", (user_id,))
+
+
+async def get_recharge_order(order_id: int):
+    return await fetchone("SELECT * FROM recharge_orders WHERE id=%s", (order_id,))
