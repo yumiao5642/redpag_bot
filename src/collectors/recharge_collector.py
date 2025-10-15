@@ -23,6 +23,84 @@ EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting'
 def _safe_notes(s: str) -> str:
     return re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9_-]", "", s)
 
+async def _wait_energy_ready(addr: str, need: int, timeout: int = 30):
+    end = time.time() + timeout
+    while time.time() < end:
+        res = get_account_resource(addr)
+        if res['energy'] >= need:
+            return True
+        await asyncio.sleep(2)
+    return False
+
+async def _precheck_and_prepare(uid: int, addr: str, oid: int, order_no: str) -> tuple[bool, float]:
+    """返回 (ok, usdt_balance)。ok 为 True 才允许归集。
+    规则：余额≥阈值 & 能量≥阈值 & 带宽≥阈值。
+    能量不足->租；带宽不足->TRX 代付；补完后再次核验，不足则本轮不发起交易。
+    注意：交易失败也会消耗能量，因此我们在发起交易前尽量把资源补齐，避免空耗。
+    """
+    need_energy = int(os.getenv("USDT_ENERGY_REQUIRE", "90000"))
+    need_bw = int(os.getenv("MIN_BANDWIDTH", "800"))
+    min_deposit = float(os.getenv("MIN_DEPOSIT_USDT", "10"))
+
+    # 1) 余额
+    bal = await get_usdt_balance(addr)
+    if bal < min_deposit:
+        collect_logger.info(f"⏸ 地址 {addr} 余额 {bal:.6f} < 阈值 {min_deposit:.2f}，本轮不归集")
+        return False, float(bal)
+
+    # 2) 资源现状
+    res = get_account_resource(addr)
+    ok_energy = res['energy'] >= need_energy
+    ok_bw = res['bandwidth'] >= need_bw
+
+    # 2.1 能量不足 → 若 1h 内无有效租单则下单；然后轮询等待生效
+    if not ok_energy:
+        if not await has_active_energy_rent(addr):
+            try:
+                resp = await rent_energy(
+                    receive_address=addr,
+                    pay_nums=max(need_energy - res['energy'], 20000),
+                    rent_time=1,
+                    order_notes=_safe_notes(f"order-{order_no}")
+                )
+                rent_id = (resp or {}).get("order_id")
+                await add_energy_rent_log(addr, oid, order_no, rent_order_id=str(rent_id), ttl_seconds=3600)
+                collect_logger.info(f"⚡ 已租能量，订单 {oid}（{order_no}） rent_id={rent_id}，等待生效…")
+            except Exception as e:
+                collect_logger.error(f"❌ 能量租用失败：{e}；资源不足，先不归集")
+                return False, float(bal)
+        # 无论是否新下单，都等到达到阈值或超时
+        ok = await _wait_energy_ready(addr, need_energy, timeout=int(os.getenv("TRONGAS_ACTIVATION_DELAY", "30")))
+        res = get_account_resource(addr)
+        ok_energy = res['energy'] >= need_energy
+        collect_logger.info(f"🔎 能量检查：{res['energy']} / 需要 {need_energy} → {'OK' if ok_energy else '不足'}")
+        if not ok_energy:
+            # 即便未达阈值，也不要重复下单（避免空耗），保留到下一轮
+            return False, float(bal)
+
+    # 2.2 带宽不足 → TRX 代付
+    if not ok_bw:
+        fee_from = os.getenv("FEE_PAYER_ADDRESS")
+        fee_priv = os.getenv("FEE_PAYER_PRIVKEY_HEX")
+        topup = float(os.getenv("TOPUP_TRX", "2"))
+        if fee_from and fee_priv and topup > 0:
+            try:
+                txid = send_trx(fee_priv, fee_from, addr, topup)
+                collect_logger.info(f"🪙 带宽不足，已代付 {topup} TRX → {addr}，txid={txid}")
+                await asyncio.sleep(3)
+            except Exception as e:
+                collect_logger.error(f"❌ TRX 代付失败：{e}；资源不足，先不归集")
+                return False, float(bal)
+        else:
+            collect_logger.warning(f"⚠️ 带宽不足且未配置代付账号，先不归集")
+            return False, float(bal)
+
+        res2 = get_account_resource(addr)
+        collect_logger.info(f"🔎 代付后资源：带宽 {res2['bandwidth']}、能量 {res2['energy']}")
+        if res2['bandwidth'] < need_bw:
+            return False, float(bal)
+
+    return True, float(bal)
 
 async def _ensure_resources(addr: str, oid: int, order_no: str) -> None:
     """确保该地址本次归集的 能量+带宽 足够；1小时内不重复租能量；带宽不足自动TRX代付"""
@@ -73,21 +151,16 @@ async def _ensure_resources(addr: str, oid: int, order_no: str) -> None:
     collect_logger.info(f"🪙 代付后资源：带宽 {res2['bandwidth']}、能量 {res2['energy']}")
 
 
-async def _wait_energy_ready(addr: str, need: int, timeout: int = 30):
-    end = time.time() + timeout
-    while time.time() < end:
-        res = get_account_resource(addr)
-        if res['energy'] >= need:
-            return True
-        await asyncio.sleep(2)
-    return False
-
 async def _collect_and_book(uid: int, addr: str, oid: int, order_no: str):
     """
     1) 先确保资源（能量+带宽）
     2) 发起 USDT 全额转账到归集地址
     3) 置 verifying；记账（含幂等）
     """
+    ok, bal = await _precheck_and_prepare(uid, addr, oid, order_no)
+    if not ok:
+        collect_logger.info(f"⏸ 订单 {oid}（{order_no}）预检未通过，跳过本轮归集")
+        return None
     bal = await get_usdt_balance(addr)
     if bal <= 0:
         collect_logger.warning(f"⚠️ 订单 {oid}（{order_no}）准备归集时余额为 0，跳过")
