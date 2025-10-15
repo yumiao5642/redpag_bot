@@ -14,6 +14,40 @@ from ..logger import collect_logger
 from tronpy.exceptions import TransactionNotFound
 
 
+TRON_GRID_KEYS = [k.strip() for k in os.getenv("TRONGRID_API_KEY","").split(",") if k.strip()]
+
+
+def _tg_headers(ix: int):
+    h = {"Accept":"application/json"}
+    if TRON_GRID_KEYS:
+        h["TRON-PRO-API-KEY"] = TRON_GRID_KEYS[ix % len(TRON_GRID_KEYS)]
+    return h
+
+def _tg_get(url, params=None, tries=3, backoff=0.7):
+    for i in range(tries):
+        r = requests.get(url, params=params or {}, headers=_tg_headers(i), timeout=15)
+        if r.status_code == 429:
+            time.sleep(backoff*(i+1)); continue
+        r.raise_for_status(); return r.json()
+    raise RuntimeError("TronGrid 429/失败过多")
+
+async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
+    url = f"https://api.trongrid.io/v1/accounts/{address}/transactions/trc20"
+    js = _tg_get(url, params={"limit": limit})
+    out = []
+    for it in js.get("data", []):
+        v = it.get("value", {})
+        if not v: continue
+        out.append({
+            "hash": it.get("transaction_id",""),
+            "from": v.get("from",""),
+            "to": v.get("to",""),
+            "amount": float(v.get("value",0))/ (10 ** int(v.get("decimal",6))),
+            "asset": v.get("symbol","USDT")
+        })
+    return out
+
+
 def get_trx_balance(address: str) -> float:
     """
     读取地址TRX余额（单位：TRX）

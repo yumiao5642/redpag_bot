@@ -3,7 +3,6 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 )
 from telegram import BotCommand
-
 from .config import BOT_TOKEN
 from .db import init_pool
 from .handlers import start as h_start
@@ -56,6 +55,11 @@ async def on_text_router(update, context):
     await h_password.on_text(update, context)
     await h_addrquery.addr_query_ontext(update, context)
 
+async def _only_private(update, context):
+    c = update.effective_chat
+    if c and c.type != "private": return False
+    return True
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -64,6 +68,15 @@ def main():
     app.add_handler(CallbackQueryHandler(h_recharge.recharge_callback, pattern=r"^recharge_"))
     app.add_handler(CallbackQueryHandler(h_withdraw.withdraw_callback, pattern=r"^withdraw_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_router))
+
+    await app.bot.set_my_commands([
+        BotCommand("start","开始使用"),
+        BotCommand("wallet","我的钱包"),
+        BotCommand("recharge","充值"),
+        BotCommand("withdraw","提现"),
+        BotCommand("redpacket","红包"),
+        BotCommand("help","帮助")
+    ])
 
     async def _startup(_):
         await init_pool()
