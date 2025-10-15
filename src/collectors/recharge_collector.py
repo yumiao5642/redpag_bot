@@ -1,27 +1,24 @@
-import asyncio, re, time, os
-from decimal import Decimal
-from typing import Optional, Tuple
+import asyncio
+import time
+from typing import Optional
+
+from ..logger import collect_logger as logger
 from ..db import init_pool, close_pool
 from ..models import (
-    list_recharge_waiting, list_recharge_collecting, list_recharge_verifying,
-    set_recharge_status, get_wallet, update_wallet_balance, add_ledger, execute,
-    ledger_exists_for_ref, has_active_energy_rent, add_energy_rent_log, last_energy_rent_seconds_ago
+    set_recharge_status, get_recharge_orders_by_status,
+    add_ledger, ledger_exists_for_ref, get_user_balance, set_user_balance,
+    sum_user_usdt_balance, set_flag, has_active_energy_rent, add_energy_rent_log,
 )
-from ..config import MIN_DEPOSIT_USDT, AGGREGATE_ADDRESS
-from ..logger import collect_logger
-from ..services.energy import rent_energy
-from ..services.encryption import decrypt_text
+from ..config import (
+    MIN_DEPOSIT_USDT, USDT_CONTRACT, AGGREGATE_ADDRESS,
+    RESOURCE_ENERGY_REQUIRED, RESOURCE_BANDWIDTH_SUGGEST,
+    TRONGAS_ACTIVATION_DELAY,
+)
 from ..services.tron import (
-    get_usdt_balance,
-    usdt_transfer_all,
-    get_account_resource,
-    get_trx_balance,      # ✅ 新增
-    send_trx,
+    get_usdt_balance, get_account_resource, topup_trx,
+    transfer_usdt_from_user_to_agg, get_trc20_balance,
 )
-from telegram import Bot
-from ..config import BOT_TOKEN, AGGREGATE_ADDRESS, USDT_CONTRACT
-from ..services.tron import get_trc20_balance
-from ..models import sum_user_usdt_balance, set_flag
+from ..services.energy import rent_energy
 
 bot = Bot(BOT_TOKEN)
 

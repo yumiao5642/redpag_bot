@@ -10,6 +10,51 @@ from ..keyboards import redpacket_inline_menu, redpacket_create_menu
 from ..services.redalgo import split_random, split_average
 from ..logger import redpacket_logger
 from ..handlers.common import ensure_user_and_wallet, fmt_amount
+from .common import show_main_menu
+
+
+TYPES = [("random", "🎲 随机"), ("avg", "📦 平均"), ("exclusive", "🔒 专属")]
+
+def _type_kb(cur: str):
+    rows = []
+    btns = []
+    for k, label in TYPES:
+        prefix = "✅ " if k == cur else ""
+        btns.append(InlineKeyboardButton(prefix + label, callback_data=f"rp_type:{k}"))
+    rows.append(btns)
+    return InlineKeyboardMarkup(rows)
+
+async def entry_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 默认随机
+    context.user_data.setdefault("rp_type", "random")
+    cur = context.user_data["rp_type"]
+    text = (
+        "🧧 发送红包\n\n"
+        "封面未设置\n\n"
+        "--- ☝️ 红包封面 ☝️ ---\n\n"
+        f"类型：[{ '、'.join([('👉'+l) if k==cur else l for k,l in TYPES]) }]\n\n"
+        "币种：USDT-trc20\n数量：1\n金额：1.00\n\n"
+        "提示：未领取的将在24小时后退款。"
+    )
+    await update.message.reply_text(text, reply_markup=_type_kb(cur))
+
+async def type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    _, t = (q.data or "rp_type:random").split(":", 1)
+    if t not in [k for k,_ in TYPES]:
+        t = "random"
+    context.user_data["rp_type"] = t
+    cur = t
+    text = (
+        "🧧 发送红包\n\n"
+        "封面未设置\n\n"
+        "--- ☝️ 红包封面 ☝️ ---\n\n"
+        f"类型：[{ '、'.join([('👉'+l) if k==cur else l for k,l in TYPES]) }]\n\n"
+        "币种：USDT-trc20\n数量：1\n金额：1.00\n\n"
+        "提示：未领取的将在24小时后退款。"
+    )
+    await q.edit_message_text(text=text, reply_markup=_type_kb(cur))
 
 def _fmt_rp(r):
     return f"ID:{r['id']} | 类型:{r['type']} | 数量:{r['count']} | 总额:{fmt_amount(r['total_amount'])} | 状态:{r['status']}"

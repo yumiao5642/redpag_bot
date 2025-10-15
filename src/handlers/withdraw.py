@@ -18,6 +18,17 @@ if await get_flag("lock_redpacket"):  # red_packet.py
     await show_main_menu(update.effective_chat.id, context)
     return
 
+async def withdraw_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ✅ 功能锁拦截必须写在异步函数内部
+    if await get_flag("lock_withdraw"):
+        await update.message.reply_text("⚠️ 维护中..请稍候尝试!")
+        await show_main_menu(update.effective_chat.id, context)
+        return
+
+    # TODO: 这里继续你的提现流程（余额、地址列表、手续费说明等）
+    await update.message.reply_text("提现功能开发中…")
+    await show_main_menu(update.effective_chat.id, context)
+
 
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
