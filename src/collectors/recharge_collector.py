@@ -9,9 +9,14 @@ from ..models import (
 )
 from ..config import MIN_DEPOSIT_USDT, AGGREGATE_ADDRESS
 from ..logger import collect_logger
-from ..services.tron import get_usdt_balance, usdt_transfer_all
 from ..services.energy import rent_energy
 from ..services.encryption import decrypt_text
+from ..services.tron import (
+    get_usdt_balance,
+    usdt_transfer_all,
+    get_account_resource,   # ✅ 新增
+    send_trx,               # ✅ 新增（带宽不足时代付 TRX 会用到）
+)
 
 EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting' AND expire_at <= NOW()"
 
