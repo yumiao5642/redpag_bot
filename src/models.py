@@ -247,6 +247,16 @@ async def add_red_packet_claim(*args, **kwargs):
     return 0
 
 # —— 能量租用记录 —— #
+async def last_energy_rent_seconds_ago(address: str) -> int:
+    row = await fetchone(
+        "SELECT TIMESTAMPDIFF(SECOND, rented_at, NOW()) AS sec FROM energy_rent_logs "
+        "WHERE address=%s ORDER BY id DESC LIMIT 1",
+        (address,),
+    )
+    if not row or row.get("sec") is None:
+        return 10**9
+    return int(row["sec"])
+
 async def has_active_energy_rent(address: str) -> bool:
     row = await fetchone(
         "SELECT id FROM energy_rent_logs WHERE address=%s AND status='active' AND expire_at>NOW() ORDER BY id DESC LIMIT 1",

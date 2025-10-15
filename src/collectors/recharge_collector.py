@@ -5,7 +5,7 @@ from ..db import init_pool, close_pool
 from ..models import (
     list_recharge_waiting, list_recharge_collecting, list_recharge_verifying,
     set_recharge_status, get_wallet, update_wallet_balance, add_ledger, execute,
-    ledger_exists_for_ref
+    ledger_exists_for_ref, has_active_energy_rent, add_energy_rent_log, last_energy_rent_seconds_ago
 )
 from ..config import MIN_DEPOSIT_USDT, AGGREGATE_ADDRESS
 from ..logger import collect_logger
@@ -14,8 +14,9 @@ from ..services.encryption import decrypt_text
 from ..services.tron import (
     get_usdt_balance,
     usdt_transfer_all,
-    get_account_resource,   # ✅ 新增
-    send_trx,               # ✅ 新增（带宽不足时代付 TRX 会用到）
+    get_account_resource,
+    get_trx_balance,      # ✅ 新增
+    send_trx,
 )
 
 EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting' AND expire_at <= NOW()"
@@ -32,75 +33,96 @@ async def _wait_energy_ready(addr: str, need: int, timeout: int = 30):
         await asyncio.sleep(2)
     return False
 
-async def _precheck_and_prepare(uid: int, addr: str, oid: int, order_no: str) -> tuple[bool, float]:
-    """返回 (ok, usdt_balance)。ok 为 True 才允许归集。
-    规则：余额≥阈值 & 能量≥阈值 & 带宽≥阈值。
-    能量不足->租；带宽不足->TRX 代付；补完后再次核验，不足则本轮不发起交易。
-    注意：交易失败也会消耗能量，因此我们在发起交易前尽量把资源补齐，避免空耗。
-    """
+def _log_resource_snapshot(addr: str, usdt_bal: float, res: dict, need_energy: int, need_bw: int, trx_bal: float, prefix: str="🔎 资源快照"):
+    collect_logger.info(
+        f"{prefix}：\n"
+        f"  • 地址：{addr}\n"
+        f"  • USDT余额：{usdt_bal:.6f}\n"
+        f"  • 能量：{res['energy']} / 需要 {need_energy}\n"
+        f"  • 带宽：{res['bandwidth']} / 建议 {need_bw}\n"
+        f"  • TRX余额：{trx_bal:.6f}"
+    )
+
+async def _precheck_and_prepare(uid: int, addr: str, oid: int, order_no: str) -> Tuple[bool, float]:
     need_energy = int(os.getenv("USDT_ENERGY_REQUIRE", "90000"))
     need_bw = int(os.getenv("MIN_BANDWIDTH", "800"))
     min_deposit = float(os.getenv("MIN_DEPOSIT_USDT", "10"))
+    min_trx_for_bw = float(os.getenv("MIN_TRX_FOR_BANDWIDTH", "1.0"))
+    trx_topup_target = float(os.getenv("TRX_TOPUP_TARGET", "2.0"))
+    rent_retry_sec = int(os.getenv("ENERGY_RENT_RETRY_SECONDS", "120"))
 
-    # 1) 余额
-    bal = await get_usdt_balance(addr)
-    if bal < min_deposit:
-        collect_logger.info(f"⏸ 地址 {addr} 余额 {bal:.6f} < 阈值 {min_deposit:.2f}，本轮不归集")
-        return False, float(bal)
+    # 余额
+    usdt_bal = await get_usdt_balance(addr)
+    res0 = get_account_resource(addr)
+    trx_bal0 = get_trx_balance(addr)
+    _log_resource_snapshot(addr, usdt_bal, res0, need_energy, need_bw, trx_bal0, prefix="🔎 资源快照（预检前）")
 
-    # 2) 资源现状
-    res = get_account_resource(addr)
-    ok_energy = res['energy'] >= need_energy
-    ok_bw = res['bandwidth'] >= need_bw
+    if usdt_bal < min_deposit:
+        collect_logger.info(f"⏸ USDT不足：{usdt_bal:.6f} < {min_deposit:.2f}，本轮不归集")
+        return False, usdt_bal
 
-    # 2.1 能量不足 → 若 1h 内无有效租单则下单；然后轮询等待生效
-    if not ok_energy:
-        if not await has_active_energy_rent(addr):
+    # —— 能量保障：不足就租，哪怕已有有效租单，但 energy 仍达不到阈值，也会根据最小间隔再次租 —— #
+    if res0['energy'] < need_energy:
+        can_rent = True
+        ago = await last_energy_rent_seconds_ago(addr)
+        if ago < rent_retry_sec:
+            can_rent = False
+            collect_logger.info(f"⏳ 距离上次租能量 {ago}s < {rent_retry_sec}s，暂不重复下单（避免频繁下单）")
+
+        if can_rent:
             try:
-                resp = await rent_energy(
-                    receive_address=addr,
-                    pay_nums=max(need_energy - res['energy'], 20000),
-                    rent_time=1,
-                    order_notes=_safe_notes(f"order-{order_no}")
-                )
-                rent_id = (resp or {}).get("order_id")
-                await add_energy_rent_log(addr, oid, order_no, rent_order_id=str(rent_id), ttl_seconds=3600)
-                collect_logger.info(f"⚡ 已租能量，订单 {oid}（{order_no}） rent_id={rent_id}，等待生效…")
-            except Exception as e:
-                collect_logger.error(f"❌ 能量租用失败：{e}；资源不足，先不归集")
-                return False, float(bal)
-        # 无论是否新下单，都等到达到阈值或超时
-        ok = await _wait_energy_ready(addr, need_energy, timeout=int(os.getenv("TRONGAS_ACTIVATION_DELAY", "30")))
-        res = get_account_resource(addr)
-        ok_energy = res['energy'] >= need_energy
-        collect_logger.info(f"🔎 能量检查：{res['energy']} / 需要 {need_energy} → {'OK' if ok_energy else '不足'}")
-        if not ok_energy:
-            # 即便未达阈值，也不要重复下单（避免空耗），保留到下一轮
-            return False, float(bal)
+                min_rent = int(os.getenv("TRONGAS_MIN_RENT", "32000"))
+                step = max(int(os.getenv("TRONGAS_RENT_STEP", "1000")), 1)
+                gap = max(need_energy - res0['energy'], min_rent)
+                gap = ((gap + step - 1) // step) * step
+                collect_logger.info(f"⚡ 计划租能量：缺口≈{need_energy - res0['energy']}，下单量={gap}（min={min_rent}, step={step}）")
+                resp = await rent_energy(receive_address=addr,pay_nums=gap,rent_time=1,order_notes=f"order-{order_no}")
 
-    # 2.2 带宽不足 → TRX 代付
-    if not ok_bw:
+                rid = (resp or {}).get("orderId") or (resp or {}).get("order_id")
+                await add_energy_rent_log(addr, oid, order_no, rent_order_id=str(rid), ttl_seconds=3600)
+                collect_logger.info(f"⚡ 已租能量 gap≈{gap}：order_id={rid}，等待生效…")
+            except Exception as e:
+                collect_logger.error(f"❌ 租能量失败：{e}；先不归集")
+                return False, usdt_bal
+
+        ok = await _wait_energy_ready(addr, need_energy, timeout=int(os.getenv("TRONGAS_ACTIVATION_DELAY", "30")))
+        res1 = get_account_resource(addr)
+        trx_bal1 = get_trx_balance(addr)
+        _log_resource_snapshot(addr, usdt_bal, res1, need_energy, need_bw, trx_bal1, prefix="🔎 资源快照（租能量后）")
+        if res1['energy'] < need_energy:
+            collect_logger.info(f"⏸ 能量仍不足：{res1['energy']} < {need_energy}，本轮不归集")
+            return False, usdt_bal
+        res0 = res1
+        trx_bal0 = trx_bal1
+
+
+    # —— 带宽保障：放宽为“带宽≥阈值 或 TRX余额≥最小值” —— #
+    if res0['bandwidth'] < need_bw and trx_bal0 < min_trx_for_bw:
         fee_from = os.getenv("FEE_PAYER_ADDRESS")
         fee_priv = os.getenv("FEE_PAYER_PRIVKEY_HEX")
-        topup = float(os.getenv("TOPUP_TRX", "2"))
-        if fee_from and fee_priv and topup > 0:
-            try:
-                txid = send_trx(fee_priv, fee_from, addr, topup)
-                collect_logger.info(f"🪙 带宽不足，已代付 {topup} TRX → {addr}，txid={txid}")
-                await asyncio.sleep(3)
-            except Exception as e:
-                collect_logger.error(f"❌ TRX 代付失败：{e}；资源不足，先不归集")
-                return False, float(bal)
-        else:
-            collect_logger.warning(f"⚠️ 带宽不足且未配置代付账号，先不归集")
-            return False, float(bal)
+        if not (fee_from and fee_priv):
+            collect_logger.warning(f"⚠️ 带宽不足且 TRX 余额({trx_bal0:.6f})<最小值({min_trx_for_bw})，且未配置代付账号，无法保障带宽")
+            return False, usdt_bal
+
+        # 代付金额 = 目标 - 当前（留出0.1安全余量）
+        need_topup = max(0.0, trx_topup_target - trx_bal0 + 0.1)
+        try:
+            txid = send_trx(fee_priv, fee_from, addr, need_topup)
+            collect_logger.info(f"🪙 代付 TRX {need_topup:.6f} → {addr} 成功，txid={txid}")
+            await asyncio.sleep(3)
+        except Exception as e:
+            collect_logger.error(f"❌ 代付失败：{e}；本轮不归集")
+            return False, usdt_bal
 
         res2 = get_account_resource(addr)
-        collect_logger.info(f"🔎 代付后资源：带宽 {res2['bandwidth']}、能量 {res2['energy']}")
-        if res2['bandwidth'] < need_bw:
-            return False, float(bal)
+        trx_bal2 = get_trx_balance(addr)
+        _log_resource_snapshot(addr, usdt_bal, res2, need_energy, need_bw, trx_bal2, prefix="🔎 资源快照（代付后）")
+        # 代付后即便带宽字段仍<阈值，只要 TRX≥最小值就允许继续（靠烧费）
+        if trx_bal2 < min_trx_for_bw:
+            collect_logger.info(f"⏸ 代付后 TRX 余额仍不足：{trx_bal2:.6f} < {min_trx_for_bw}，本轮不归集")
+            return False, usdt_bal
 
-    return True, float(bal)
+    return True, usdt_bal
 
 async def _ensure_resources(addr: str, oid: int, order_no: str) -> None:
     """确保该地址本次归集的 能量+带宽 足够；1小时内不重复租能量；带宽不足自动TRX代付"""
@@ -336,3 +358,4 @@ async def main_once():
 
 if __name__ == "__main__":
     asyncio.run(main_once())
+

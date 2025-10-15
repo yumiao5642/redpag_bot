@@ -14,6 +14,14 @@ from ..logger import collect_logger
 from tronpy.exceptions import TransactionNotFound
 
 
+def get_trx_balance(address: str) -> float:
+    """
+    读取地址TRX余额（单位：TRX）
+    """
+    c = _get_client()
+    acc = c.get_account(address)  # dict；balance 为 Sun
+    bal_sun = int(acc.get("balance", 0))
+    return bal_sun / 1_000_000.0
 
 def wait_tx_committed(txid: str, timeout: int = 45, interval: float = 1.5) -> dict:
     """
