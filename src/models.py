@@ -3,6 +3,8 @@ from datetime import datetime
 import random, string
 
 from .db import fetchone, fetchall, execute  # 导出 execute 供其他模块使用
+from .db import fetchone, execute, fetchall
+
 
 # =========================
 # 小工具
@@ -278,3 +280,22 @@ async def mark_energy_rent_used(address: str) -> None:
         "UPDATE energy_rent_logs SET status='used' WHERE address=%s AND status='active'",
         (address,),
     )
+
+async def get_flag(key: str) -> bool:
+    r = await fetchone("SELECT v FROM sys_flags WHERE k=%s", (key,))
+    return (r and r["v"] == "1")
+
+async def set_flag(key: str, val: bool):
+    await execute("INSERT INTO sys_flags(k,v) VALUES(%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)",
+                  (key, "1" if val else "0"))
+
+async def sum_user_usdt_balance() -> float:
+    r = await fetchone("SELECT COALESCE(SUM(usdt_trc20_balance),0) AS s FROM user_wallets", ())
+    return float(r["s"] if r else 0)
+
+async def get_ledger_amount_by_ref(user_id: int, ref_type: str, ref_table: str, ref_id: int):
+    r = await fetchone(
+        "SELECT amount FROM ledger WHERE user_id=%s AND ref_type=%s AND ref_table=%s AND ref_id=%s LIMIT 1",
+        (user_id, ref_type, ref_table, ref_id)
+    )
+    return float(r["amount"]) if r else None

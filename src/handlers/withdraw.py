@@ -4,6 +4,20 @@ from ..models import get_wallet, list_user_addresses
 from ..config import MIN_WITHDRAW_USDT, WITHDRAW_FEE_FIXED
 from ..logger import withdraw_logger
 from .common import fmt_amount
+from .common import show_main_menu
+from ..models import get_flag
+
+if await get_flag("lock_withdraw"):   # withdraw.py
+    await update.message.reply_text("⚠️ 维护中..请稍候尝试!")
+    await show_main_menu(update.effective_chat.id, context)
+    return
+
+# ...
+if await get_flag("lock_redpacket"):  # red_packet.py
+    await update.message.reply_text("⚠️ 维护中..请稍候尝试!")
+    await show_main_menu(update.effective_chat.id, context)
+    return
+
 
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user

@@ -18,20 +18,77 @@ from ..services.tron import (
     get_trx_balance,      # ✅ 新增
     send_trx,
 )
+from telegram import Bot
+from ..config import BOT_TOKEN, AGGREGATE_ADDRESS, USDT_CONTRACT
+from ..services.tron import get_trc20_balance
+from ..models import sum_user_usdt_balance, set_flag
+
+bot = Bot(BOT_TOKEN)
+
+
+async def _notify_success(user_id: int, order_no: str, amt: float, new_bal: float):
+    txt = (
+      f"✅ 充值成功\n"
+      f"订单号：`{order_no}`\n"
+      f"到账金额：**{amt:.2f} USDT**\n"
+      f"当前余额：**{new_bal:.2f} USDT**"
+    )
+    await bot.send_message(chat_id=user_id, text=txt, parse_mode="Markdown")
+
+async def _reconcile_and_lock():
+    # 聚合地址余额 vs 用户总余额
+    agg = await get_trc20_balance(AGGREGATE_ADDRESS, USDT_CONTRACT)
+    total = await sum_user_usdt_balance()
+    # 规则：总余额 <= 聚合余额 为正常，否则锁功能
+    need_lock = total > agg + 1e-8
+    await set_flag("lock_withdraw", need_lock)
+    await set_flag("lock_redpacket", need_lock)
 
 EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting' AND expire_at <= NOW()"
 
 def _safe_notes(s: str) -> str:
     return re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9_-]", "", s)
 
-async def _wait_energy_ready(addr: str, need: int, timeout: int = 30):
-    end = time.time() + timeout
-    while time.time() < end:
+# 在 src/collectors/recharge_collector.py 顶部合适位置添加
+import os, time, asyncio
+from . . .  # 你现有的 import 保持不动
+
+async def _wait_energy_ready(addr: str, need_energy: int, timeout: int = None, poll_interval: int = None) -> bool:
+    """
+    轮询等待能量生效：直到能量 >= need_energy 或等待达到 timeout。
+    - timeout 从环境变量 TRONGAS_ACTIVATION_DELAY 读（默认 30s）
+    - poll_interval 从环境变量 TRONGAS_POLL_INTERVAL 读（默认 3s）
+    """
+    from ..services.tron import get_account_resource  # 避免循环导入，放在函数内
+    from ..logger import collect_logger
+
+    timeout = int(os.getenv("TRONGAS_ACTIVATION_DELAY", "30")) if timeout is None else int(timeout)
+    poll_interval = int(os.getenv("TRONGAS_POLL_INTERVAL", "3")) if poll_interval is None else int(poll_interval)
+
+    start = time.monotonic()
+    # 先打一次快照
+    res = get_account_resource(addr)
+    if res.get("energy", 0) >= need_energy:
+        used = time.monotonic() - start
+        collect_logger.info(f"✅ 能量已就绪：{res['energy']} ≥ {need_energy}（用时 {used:.1f}s，timeout={timeout}s）")
+        return True
+
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed >= timeout:
+            collect_logger.info(f"⌛ 等待能量超时：{res['energy']} < {need_energy}（已等 {elapsed:.1f}s / {timeout}s）")
+            return False
+
+        left = min(poll_interval, max(1, timeout - int(elapsed)))
+        collect_logger.info(f"⏳ 等待能量生效 {int(elapsed)}s/{timeout}s：当前 {res['energy']} < {need_energy}，{left}s 后重查…")
+        await asyncio.sleep(left)
+
+        # 重查资源
         res = get_account_resource(addr)
-        if res['energy'] >= need:
+        if res.get("energy", 0) >= need_energy:
+            used = time.monotonic() - start
+            collect_logger.info(f"✅ 能量已就绪：{res['energy']} ≥ {need_energy}（用时 {used:.1f}s / {timeout}s）")
             return True
-        await asyncio.sleep(2)
-    return False
 
 def _log_resource_snapshot(addr: str, usdt_bal: float, res: dict, need_energy: int, need_bw: int, trx_bal: float, prefix: str="🔎 资源快照"):
     collect_logger.info(
@@ -237,6 +294,8 @@ async def step_verifying(uid: int, addr: str, oid: int, order_no: str) -> bool:
     if await ledger_exists_for_ref("recharge", "recharge_orders", oid):
         await set_recharge_status(oid, "success", None)
         collect_logger.info(f"✅ 订单 {oid} 已在 ledger 记账：verifying → success")
+        await _notify_success(user_id, order_no, credited_amt, new_balance)
+        await _reconcile_and_lock()
         return True
 
     after_bal = await get_usdt_balance(addr)
@@ -246,6 +305,7 @@ async def step_verifying(uid: int, addr: str, oid: int, order_no: str) -> bool:
         await set_recharge_status(oid, "success", None)
         collect_logger.info(f"✅ 订单 {oid} 验证通过：verifying → success（余额≈0）")
         return True
+
 
     # 未清零，但达到阈值 → 回退并再次归集
     if float(after_bal) >= float(MIN_DEPOSIT_USDT):

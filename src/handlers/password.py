@@ -4,6 +4,22 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from ..models import set_tx_password_hash, get_tx_password_hash
 from ..logger import password_logger
+from telegram import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from .common import show_main_menu
+
+from telegram import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from .common import show_main_menu
+
+NUM_KB = ReplyKeyboardMarkup([
+    [KeyboardButton("0"), KeyboardButton("1"), KeyboardButton("4")],
+    [KeyboardButton("6"), KeyboardButton("9"), KeyboardButton("2")],
+    [KeyboardButton("7"), KeyboardButton("3"), KeyboardButton("5")],
+    [KeyboardButton("取消"), KeyboardButton("8"), KeyboardButton("⌫")]
+], resize_keyboard=True, one_time_keyboard=True)
+
+async def start_set_password(update, context):
+    await update.message.reply_text("🔐 请输入新交易密码（4~6位数字）：\n\n`* * * *`",
+        reply_markup=NUM_KB, parse_mode="Markdown")
 
 def _hash_pw(user_id: int, pw: str) -> str:
     # 简单盐：user_id + sha256

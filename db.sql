@@ -134,3 +134,13 @@ ALTER TABLE ledger
 
 -- 幂等索引（重复则忽略即可）
 CREATE INDEX idx_ledger_ref ON ledger (change_type, ref_table, ref_id);
+
+-- 系统开关表
+CREATE TABLE IF NOT EXISTS sys_flags (
+  k VARCHAR(64) PRIMARY KEY,
+  v VARCHAR(255) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 初始不锁
+INSERT IGNORE INTO sys_flags(k, v) VALUES ('lock_withdraw', '0'), ('lock_redpacket', '0');

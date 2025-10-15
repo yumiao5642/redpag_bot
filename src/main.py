@@ -2,6 +2,8 @@ import asyncio
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 )
+from telegram import BotCommand
+
 from .config import BOT_TOKEN
 from .db import init_pool
 from .handlers import start as h_start
