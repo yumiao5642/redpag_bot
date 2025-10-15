@@ -3,14 +3,9 @@ import asyncio
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from telegram import BotCommand
 from .config import BOT_TOKEN
-from .handlers import (
-    wallet as h_wallet,
-    recharge as h_recharge,
-    withdraw as h_withdraw,
-    red_packet as h_rp,
-    addr_query as h_addrq,
-    password as h_pwd,
-)
+from .handlers import wallet as h_wallet, recharge as h_recharge, withdraw as h_withdraw, red_packet as h_rp, addr_query as h_addrq, password as h_pwd
+
+
 # 仅处理私聊的 filter
 PRIVATE = filters.ChatType.PRIVATE
 

@@ -1,7 +1,6 @@
 import asyncio
 import time
 from typing import Optional
-
 from ..logger import collect_logger as logger
 from ..db import init_pool, close_pool
 from ..models import (
@@ -46,9 +45,6 @@ EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting'
 def _safe_notes(s: str) -> str:
     return re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9_-]", "", s)
 
-# 在 src/collectors/recharge_collector.py 顶部合适位置添加
-import os, time, asyncio
-from . . .  # 你现有的 import 保持不动
 
 async def _wait_energy_ready(addr: str, need_energy: int, timeout: int = None, poll_interval: int = None) -> bool:
     """

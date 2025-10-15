@@ -7,16 +7,6 @@ from .common import fmt_amount
 from .common import show_main_menu
 from ..models import get_flag
 
-if await get_flag("lock_withdraw"):   # withdraw.py
-    await update.message.reply_text("⚠️ 维护中..请稍候尝试!")
-    await show_main_menu(update.effective_chat.id, context)
-    return
-
-# ...
-if await get_flag("lock_redpacket"):  # red_packet.py
-    await update.message.reply_text("⚠️ 维护中..请稍候尝试!")
-    await show_main_menu(update.effective_chat.id, context)
-    return
 
 async def withdraw_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ 功能锁拦截必须写在异步函数内部

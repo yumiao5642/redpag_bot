@@ -13,10 +13,37 @@ from .db import fetchone, execute, fetchall
 def _rand_letters(n: int = 4) -> str:
     return ''.join(random.choice(string.ascii_lowercase) for _ in range(n))
 
+# ---------- 用户 ----------
+async def get_or_create_user(tg_id: int, username: str) -> Dict[str, Any]:
+    row = await fetchone("SELECT id, tg_id, username FROM users WHERE tg_id=%s", (tg_id,))
+    if not row:
+        await execute(
+            "INSERT INTO users(tg_id, username, usdt_trc20) VALUES(%s,%s,0)",
+            (tg_id, (username or "")[:64]),
+        )
+        row = await fetchone("SELECT id, tg_id, username FROM users WHERE tg_id=%s", (tg_id,))
+    return row
+
+
+async def get_user_balance(user_id: int) -> float:
+    row = await fetchone("SELECT usdt_trc20 FROM users WHERE id=%s", (user_id,))
+    return float(row["usdt_trc20"] or 0) if row else 0.0
+
+async def set_user_balance(user_id: int, new_balance: float) -> None:
+    await execute("UPDATE users SET usdt_trc20=%s WHERE id=%s", (new_balance, user_id))
+
+
 
 # =========================
 # 充值订单（recharge_orders）
 # =========================
+async def get_recharge_orders_by_status(status_list: List[str]) -> List[Dict[str, Any]]:
+    if not status_list:
+        return []
+    ph = ",".join(["%s"] * len(status_list))
+    sql = f"SELECT * FROM recharge_orders WHERE status IN ({ph}) ORDER BY id ASC"
+    return await fetchall(sql, tuple(status_list))
+
 
 def make_order_no(dt: Optional[datetime] = None) -> str:
     """
@@ -61,19 +88,25 @@ async def list_recharge_verifying() -> List[Dict[str, Any]]:
         ()
     )
 
-async def set_recharge_status(order_id: int, status: str, txid: Optional[str]):
-    await execute(
-        "UPDATE recharge_orders SET status=%s, txid=%s, updated_at=NOW() WHERE id=%s",
-        (status, txid, order_id)
-    )
+async def set_recharge_status(order_id: int, status: str, txid: Optional[str]) -> None:
+    if txid:
+        await execute(
+            "UPDATE recharge_orders SET status=%s, txid=%s, updated_at=NOW() WHERE id=%s",
+            (status, txid, order_id),
+        )
+    else:
+        await execute(
+            "UPDATE recharge_orders SET status=%s, updated_at=NOW() WHERE id=%s",
+            (status, order_id),
+        )
 
-async def ledger_exists_for_ref(change_type: str, ref_table: str, ref_id: int) -> bool:
+
+async def ledger_exists_for_ref(ref_type: str, ref_table: str, ref_id: int) -> bool:
     row = await fetchone(
-        "SELECT COUNT(*) AS c FROM ledger WHERE change_type=%s AND ref_table=%s AND ref_id=%s",
-        (change_type, ref_table, ref_id)
+        "SELECT id FROM ledger WHERE ref_type=%s AND ref_table=%s AND ref_id=%s LIMIT 1",
+        (ref_type, ref_table, ref_id),
     )
-    return bool(row and row.get("c", 0) > 0)
-
+    return bool(row)
 
 # =========================
 # 用户 / 交易密码（users）
@@ -93,19 +126,14 @@ async def get_tx_password_hash(user_id: int) -> Optional[str]:
     row = await fetchone("SELECT tx_password_hash FROM users WHERE id=%s", (user_id,))
     return row.get("tx_password_hash") if row else None
 
-async def has_tx_password(user_id: int) -> bool:
-    h = await get_tx_password_hash(user_id)
-    return bool(h)
 
-async def set_tx_password_hash(user_id: int, pwd_hash: str) -> None:
-    """
-    上层已经做过加盐/哈希，这里只落库。
-    表结构要求：users(tx_password_hash VARCHAR, tx_password_updated_at DATETIME 可选)
-    """
-    await execute(
-        "UPDATE users SET tx_password_hash=%s, tx_password_updated_at=NOW() WHERE id=%s",
-        (pwd_hash, user_id)
-    )
+async def has_tx_password(tg_id: int) -> bool:
+    row = await fetchone("SELECT tx_password_hash FROM users WHERE tg_id=%s", (tg_id,))
+    return bool(row and row.get("tx_password_hash"))
+
+
+async def set_tx_password_hash(tg_id: int, h: str) -> None:
+    await execute("UPDATE users SET tx_password_hash=%s WHERE tg_id=%s", (h, tg_id))
 
 
 # =========================
@@ -131,12 +159,26 @@ async def update_wallet_balance(user_id: int, new_bal: float):
 # 账变（ledger）
 # =========================
 
-async def add_ledger(user_id: int, change_type: str, amount: float, bal_before: float, bal_after: float,
-                     ref_table: str, ref_id: int, remark: str):
+async def add_ledger(
+    user_id: int,
+    change_type: str,               # 'recharge' | 'withdraw' | 'redpacket_send' | 'redpacket_claim' | 'adjust'
+    amount: float,
+    balance_before: float,
+    balance_after: float,
+    ref_table: Optional[str] = None,
+    ref_type: Optional[str] = None,
+    ref_id: Optional[int] = None,
+    remark: Optional[str] = None,
+) -> None:
     await execute(
-        "INSERT INTO ledger(user_id, change_type, amount, balance_before, balance_after, ref_table, ref_id, remark, created_at) "
-        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NOW())",
-        (user_id, change_type, amount, bal_before, bal_after, ref_table, ref_id, remark)
+        "INSERT INTO ledger(user_id, change_type, ref_table, amount, balance_before, balance_after, "
+        "ref_type, ref_id, remark, created_at) "
+        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())",
+        (
+            user_id, change_type, ref_table,
+            amount, balance_before, balance_after,
+            ref_type, ref_id, (remark or "")[:255],
+        ),
     )
 
 async def list_ledger_recent(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
@@ -261,18 +303,23 @@ async def last_energy_rent_seconds_ago(address: str) -> int:
 
 async def has_active_energy_rent(address: str) -> bool:
     row = await fetchone(
-        "SELECT id FROM energy_rent_logs WHERE address=%s AND status='active' AND expire_at>NOW() ORDER BY id DESC LIMIT 1",
+        "SELECT id FROM energy_rents WHERE address=%s AND expires_at > NOW() LIMIT 1",
         (address,),
     )
     return bool(row)
 
-async def add_energy_rent_log(address: str, order_id: int, order_no: str,
-                              rent_order_id: str = None, rent_txid: str = None,
-                              ttl_seconds: int = 3600) -> None:
+async def add_energy_rent_log(
+    address: str,
+    order_id: int,
+    order_no: str,
+    rent_order_id: Optional[str] = None,
+    ttl_seconds: int = 3600,
+) -> None:
+    # FROM_UNIXTIME(UNIX_TIMESTAMP(NOW()) + %s) 兼容 5.7
     await execute(
-        "INSERT INTO energy_rent_logs(address,order_id,order_no,provider,rent_order_id,rent_txid,rented_at,expire_at,status)"
-        " VALUES(%s,%s,%s,'trongas',%s,%s,NOW(),DATE_ADD(NOW(),INTERVAL %s SECOND),'active')",
-        (address, order_id, order_no, rent_order_id, rent_txid, ttl_seconds),
+        "INSERT INTO energy_rents(address, order_id, order_no, rent_order_id, expires_at, created_at) "
+        "VALUES(%s,%s,%s,%s, FROM_UNIXTIME(UNIX_TIMESTAMP(NOW()) + %s), NOW())",
+        (address, order_id, order_no, rent_order_id, int(ttl_seconds)),
     )
 
 async def mark_energy_rent_used(address: str) -> None:
@@ -282,20 +329,27 @@ async def mark_energy_rent_used(address: str) -> None:
     )
 
 async def get_flag(key: str) -> bool:
-    r = await fetchone("SELECT v FROM sys_flags WHERE k=%s", (key,))
-    return (r and r["v"] == "1")
+    row = await fetchone("SELECT v FROM sys_flags WHERE k=%s", (key,))
+    return str(row["v"]).strip() == "1" if row else False
 
-async def set_flag(key: str, val: bool):
-    await execute("INSERT INTO sys_flags(k,v) VALUES(%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)",
-                  (key, "1" if val else "0"))
+async def set_flag(key: str, on: bool) -> None:
+    v = "1" if on else "0"
+    # MySQL 5.7 没有标准 UPSERT，用 ON DUPLICATE KEY
+    await execute(
+        "INSERT INTO sys_flags(k,v) VALUES(%s,%s) "
+        "ON DUPLICATE KEY UPDATE v=VALUES(v), updated_at=NOW()",
+        (key, v),
+    )
 
 async def sum_user_usdt_balance() -> float:
-    r = await fetchone("SELECT COALESCE(SUM(usdt_trc20_balance),0) AS s FROM user_wallets", ())
-    return float(r["s"] if r else 0)
+    row = await fetchone("SELECT COALESCE(SUM(usdt_trc20),0) AS s FROM users", ())
+    return float(row["s"] or 0)
 
-async def get_ledger_amount_by_ref(user_id: int, ref_type: str, ref_table: str, ref_id: int):
-    r = await fetchone(
-        "SELECT amount FROM ledger WHERE user_id=%s AND ref_type=%s AND ref_table=%s AND ref_id=%s LIMIT 1",
-        (user_id, ref_type, ref_table, ref_id)
+
+async def get_ledger_amount_by_ref(ref_type: str, ref_table: str, ref_id: int) -> float:
+    row = await fetchone(
+        "SELECT COALESCE(SUM(amount),0) AS s FROM ledger WHERE ref_type=%s AND ref_table=%s AND ref_id=%s",
+        (ref_type, ref_table, ref_id),
     )
-    return float(r["amount"]) if r else None
+    return float(row["s"] or 0)
+

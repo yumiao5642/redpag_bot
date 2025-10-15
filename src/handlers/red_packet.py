@@ -15,6 +15,25 @@ from .common import show_main_menu
 
 TYPES = [("random", "🎲 随机"), ("avg", "📦 平均"), ("exclusive", "🔒 专属")]
 
+def _kb(cur: str):
+    row = []
+    for k, label in TYPES:
+        prefix = "✅ " if k == cur else ""
+        row.append(InlineKeyboardButton(prefix + label, callback_data=f"rp_type:{k}"))
+    return InlineKeyboardMarkup([row])
+
+
+def _render(cur: str) -> str:
+    pretty = " | ".join([("👉"+l) if k==cur else l for k,l in TYPES])
+    return (
+        "🧧 发送红包\n\n"
+        "封面未设置\n\n"
+        "--- ☝️ 红包封面 ☝️ ---\n\n"
+        f"类型：[ {pretty} ]\n\n"
+        "币种：USDT-trc20\n数量：1\n金额：1.00\n\n"
+        "提示：未领取的将在24小时后退款。"
+    )
+
 def _type_kb(cur: str):
     rows = []
     btns = []
@@ -25,18 +44,28 @@ def _type_kb(cur: str):
     return InlineKeyboardMarkup(rows)
 
 async def entry_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 默认随机
-    context.user_data.setdefault("rp_type", "random")
-    cur = context.user_data["rp_type"]
-    text = (
-        "🧧 发送红包\n\n"
-        "封面未设置\n\n"
-        "--- ☝️ 红包封面 ☝️ ---\n\n"
-        f"类型：[{ '、'.join([('👉'+l) if k==cur else l for k,l in TYPES]) }]\n\n"
-        "币种：USDT-trc20\n数量：1\n金额：1.00\n\n"
-        "提示：未领取的将在24小时后退款。"
-    )
-    await update.message.reply_text(text, reply_markup=_type_kb(cur))
+    # ✅ 功能锁
+    if await get_flag("lock_redpacket"):
+        await update.message.reply_text("⚠️ 维护中..请稍候尝试!")
+        await show_main_menu(update.effective_chat.id, context)
+        return
+
+    cur = context.user_data.get("rp_type", "random")
+    context.user_data["rp_type"] = cur
+    await update.message.reply_text(_render(cur), reply_markup=_kb(cur))
+
+
+async def set_rp_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        _, t = (q.data or "rp_type:random").split(":", 1)
+    except Exception:
+        t = "random"
+    if t not in [k for k,_ in TYPES]:
+        t = "random"
+    context.user_data["rp_type"] = t
+    await q.edit_message_text(text=_render(t), reply_markup=_kb(t))
 
 async def type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query

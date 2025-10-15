@@ -7,7 +7,6 @@ from telegram.ext import ContextTypes
 from ..config import MIN_DEPOSIT_USDT
 from ..logger import recharge_logger
 from ..services.qrcode_util import make_qr_png_bytes
-from ..services.tron import short_addr
 from ..models import (
     get_wallet, create_recharge_order, get_recharge_order,
     get_ledger_amount_by_ref, get_user_balance,
