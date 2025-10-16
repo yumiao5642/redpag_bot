@@ -1,8 +1,10 @@
 # src/handlers/wallet.py
 from telegram import Update
 from telegram.ext import ContextTypes
+
 from ..models import get_or_create_user, get_user_balance
 from .common import fmt_amount, show_main_menu
+
 
 async def my_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
@@ -15,6 +17,7 @@ async def my_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text)
     await show_main_menu(update.effective_chat.id, context)
+
 
 async def help_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (

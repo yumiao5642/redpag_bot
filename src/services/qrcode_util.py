@@ -1,10 +1,14 @@
 # src/services/qrcode_util.py
 import io
 from typing import Optional
+
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
 
-def make_qr_png_bytes(data: str, scale: float = 0.5, caption: Optional[str] = None) -> bytes:
+
+def make_qr_png_bytes(
+    data: str, scale: float = 0.5, caption: Optional[str] = None
+) -> bytes:
     # 生成二维码
     qr = qrcode.QRCode(border=2, box_size=10)
     qr.add_data(data)

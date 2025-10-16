@@ -1,15 +1,16 @@
-
+import random
 from decimal import Decimal, getcontext
 from typing import List
-import random
 
 # 使用 6 位小数，适配 USDT 常见精度
 getcontext().prec = 28
+
 
 def _d(x) -> Decimal:
     if isinstance(x, Decimal):
         return x
     return Decimal(str(x))
+
 
 def split_random(total_amount: float, count: int) -> List[Decimal]:
     """
@@ -56,6 +57,7 @@ def split_random(total_amount: float, count: int) -> List[Decimal]:
             return split_average(total_amount, count)
 
     return shares
+
 
 def split_average(total_amount: float, count: int) -> List[Decimal]:
     total = _d(total_amount)

@@ -5,18 +5,27 @@ from logging.handlers import RotatingFileHandler
 LOG_DIR = os.path.join(os.getcwd(), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
+
 def _make_handler(filename: str) -> RotatingFileHandler:
-    handler = RotatingFileHandler(os.path.join(LOG_DIR, filename), maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
-    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    handler = RotatingFileHandler(
+        os.path.join(LOG_DIR, filename),
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     handler.setFormatter(fmt)
     return handler
+
 
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
         logger.setLevel(logging.INFO)
         sh = logging.StreamHandler()
-        sh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
+        sh.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
         logger.addHandler(sh)
         mapping = {
             "recharge": "recharge.log",
@@ -30,6 +39,7 @@ def get_logger(name: str) -> logging.Logger:
         filename = mapping.get(name, "app.log")
         logger.addHandler(_make_handler(filename))
     return logger
+
 
 recharge_logger = get_logger("recharge")
 redpacket_logger = get_logger("redpacket")

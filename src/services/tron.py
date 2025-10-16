@@ -1,39 +1,49 @@
-import asyncio, time, random, re
-from decimal import Decimal
-from dataclasses import dataclass
-from typing import List, Optional, Union
-import requests
+import asyncio
 import os
-import os, time, requests
-from typing import List, Dict
+import random
+import re
+import time
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Dict, List, Optional, Union
 
+import requests
 from tronpy import Tron
+from tronpy.exceptions import TransactionNotFound
 from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
+
 from ..config import (
-    USDT_CONTRACT, TRON_FULLNODE_URL, USDT_DECIMALS,
-    TRONGRID_API_KEY, TRONGRID_QPS
+    TRON_FULLNODE_URL,
+    TRONGRID_API_KEY,
+    TRONGRID_QPS,
+    USDT_CONTRACT,
+    USDT_DECIMALS,
 )
 from ..logger import collect_logger
-from tronpy.exceptions import TransactionNotFound
 
-
-TRON_GRID_KEYS = [k.strip() for k in os.getenv("TRONGRID_API_KEY","").split(",") if k.strip()]
+TRON_GRID_KEYS = [
+    k.strip() for k in os.getenv("TRONGRID_API_KEY", "").split(",") if k.strip()
+]
 
 
 def _tg_headers(ix: int):
-    h = {"Accept":"application/json"}
+    h = {"Accept": "application/json"}
     if TRON_GRID_KEYS:
         h["TRON-PRO-API-KEY"] = TRON_GRID_KEYS[ix % len(TRON_GRID_KEYS)]
     return h
+
 
 def _tg_get(url, params=None, tries=3, backoff=0.7):
     for i in range(tries):
         r = requests.get(url, params=params or {}, headers=_tg_headers(i), timeout=15)
         if r.status_code == 429:
-            time.sleep(backoff*(i+1)); continue
-        r.raise_for_status(); return r.json()
+            time.sleep(backoff * (i + 1))
+            continue
+        r.raise_for_status()
+        return r.json()
     raise RuntimeError("TronGrid 429/失败过多")
+
 
 async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
     url = f"https://api.trongrid.io/v1/accounts/{address}/transactions/trc20"
@@ -41,14 +51,17 @@ async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
     out = []
     for it in js.get("data", []):
         v = it.get("value", {})
-        if not v: continue
-        out.append({
-            "hash": it.get("transaction_id",""),
-            "from": v.get("from",""),
-            "to": v.get("to",""),
-            "amount": float(v.get("value",0))/ (10 ** int(v.get("decimal",6))),
-            "asset": v.get("symbol","USDT")
-        })
+        if not v:
+            continue
+        out.append(
+            {
+                "hash": it.get("transaction_id", ""),
+                "from": v.get("from", ""),
+                "to": v.get("to", ""),
+                "amount": float(v.get("value", 0)) / (10 ** int(v.get("decimal", 6))),
+                "asset": v.get("symbol", "USDT"),
+            }
+        )
     return out
 
 
@@ -60,6 +73,7 @@ def get_trx_balance(address: str) -> float:
     acc = c.get_account(address)  # dict；balance 为 Sun
     bal_sun = int(acc.get("balance", 0))
     return bal_sun / 1_000_000.0
+
 
 def wait_tx_committed(txid: str, timeout: int = 45, interval: float = 1.5) -> dict:
     """
@@ -73,7 +87,9 @@ def wait_tx_committed(txid: str, timeout: int = 45, interval: float = 1.5) -> di
         try:
             info = c.get_transaction_info(txid)
             # TRX 普通转账可能没有 contractRet；出现 'result': 'SUCCESS' 或包含 blockNumber 即可视为成功
-            if info and (info.get("result") == "SUCCESS" or info.get("blockNumber") is not None):
+            if info and (
+                info.get("result") == "SUCCESS" or info.get("blockNumber") is not None
+            ):
                 return info
             # 有明确失败
             if info and info.get("result") == "FAILED":
@@ -86,6 +102,7 @@ def wait_tx_committed(txid: str, timeout: int = 45, interval: float = 1.5) -> di
         raise last_err
     return {}
 
+
 @dataclass
 class TronAddress:
     address: str
@@ -95,6 +112,7 @@ class TronAddress:
 # ========== 基础工具：全局异步限速 ==========
 class AsyncRateLimiter:
     """简单的最小间隔限速器，按 QPS 计算调用间隔"""
+
     def __init__(self, qps: float):
         self.interval = 1.0 / max(qps, 0.1)
         self._last = 0.0
@@ -131,6 +149,7 @@ def _get_client() -> Tron:
     )
     return Tron(provider)
 
+
 def get_account_resource(address: str) -> dict:
     """
     返回 {'bandwidth': int, 'energy': int}
@@ -139,21 +158,29 @@ def get_account_resource(address: str) -> dict:
     """
     c = _get_client()
     info = c.get_account_resource(address)
-    bw = max(0, int(info.get('freeNetLimit', 0)) - int(info.get('freeNetUsed', 0))) \
-         + max(0, int(info.get('NetLimit', 0)) - int(info.get('NetUsed', 0)))
-    en = max(0, int(info.get('EnergyLimit', 0)) - int(info.get('EnergyUsed', 0)))
-    return {'bandwidth': bw, 'energy': en}
+    bw = max(
+        0, int(info.get("freeNetLimit", 0)) - int(info.get("freeNetUsed", 0))
+    ) + max(0, int(info.get("NetLimit", 0)) - int(info.get("NetUsed", 0)))
+    en = max(0, int(info.get("EnergyLimit", 0)) - int(info.get("EnergyUsed", 0)))
+    return {"bandwidth": bw, "energy": en}
+
 
 def send_trx(priv_hex: str, from_addr: str, to_addr: str, amount_trx: float) -> str:
     c = _get_client()
     amt_sun = int(Decimal(str(amount_trx)) * Decimal(1_000_000))
-    tx = c.trx.transfer(from_addr, to_addr, amt_sun).build().sign(PrivateKey(bytes.fromhex(priv_hex))).broadcast()
+    tx = (
+        c.trx.transfer(from_addr, to_addr, amt_sun)
+        .build()
+        .sign(PrivateKey(bytes.fromhex(priv_hex)))
+        .broadcast()
+    )
     txid = tx.txid
     info = wait_tx_committed(txid, timeout=45)
     # 判定成功：有块号且未标记 FAILED
     if info and info.get("result") != "FAILED" and info.get("blockNumber") is not None:
         return txid
     raise RuntimeError(f"TRX topup not confirmed: {info or 'no-info'} txid={txid}")
+
 
 def generate_address() -> TronAddress:
     """仅用于占位/初始化，生产上请使用你现有的加密私钥方案"""
@@ -175,7 +202,7 @@ async def _retry_with_backoff(coro_func, *args, **kwargs):
         except Exception as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (401, 403, 429) or isinstance(e, requests.HTTPError):
-                delay = (2 ** attempt) + random.uniform(0, 0.5)
+                delay = (2**attempt) + random.uniform(0, 0.5)
                 collect_logger.warning(
                     f"[TronGrid] 受限/未授权，重试 {attempt+1}/4，{delay:.2f}s 后重试；err={e}"
                 )
@@ -200,11 +227,14 @@ async def get_usdt_balance(address: str) -> float:
     return await _retry_with_backoff(_call)
 
 
-async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount: float) -> str:
+async def usdt_transfer_all(
+    priv_hex: str, from_addr: str, to_addr: str, amount: float
+) -> str:
     """
     将 amount USDT 从 from_addr 转到 to_addr，等待确认，返回 txid
     如果回执不是 SUCCESS（如 OUT_OF_ENERGY / REVERT 等），直接抛异常，让上层保持 collecting 状态重试。
     """
+
     async def _call():
         await _limiter.wait()
 
@@ -222,20 +252,25 @@ async def usdt_transfer_all(priv_hex: str, from_addr: str, to_addr: str, amount:
             )
             receipt = tx.wait()
             # 常见位置：contractResult/receipt/result/ret 等；tronpy 回执结构可能因节点差异略不同
-            result = (receipt.get('receipt') or {}).get('result') or receipt.get('contractRet') or ''
-            result = str(result).upper()
-            if result != 'SUCCESS':
-                raise RuntimeError(f"transfer receipt not SUCCESS: {result}  txid={tx.txid}")
-
-            collect_logger.info(
-                f"✅ USDT 转账确认成功：txid={tx.txid} result={result}"
+            result = (
+                (receipt.get("receipt") or {}).get("result")
+                or receipt.get("contractRet")
+                or ""
             )
+            result = str(result).upper()
+            if result != "SUCCESS":
+                raise RuntimeError(
+                    f"transfer receipt not SUCCESS: {result}  txid={tx.txid}"
+                )
+
+            collect_logger.info(f"✅ USDT 转账确认成功：txid={tx.txid} result={result}")
             return tx.txid
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _task)
 
     return await _retry_with_backoff(_call)
+
 
 # ========== 地址校验 ==========
 # 轻量级格式校验：T 开头 + 34 位 Base58 字符（排除 0 O I l）

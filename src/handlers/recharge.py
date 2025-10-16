@@ -1,16 +1,19 @@
-from io import BytesIO
 from datetime import datetime, timedelta
+from io import BytesIO
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from ..config import MIN_DEPOSIT_USDT
 from ..logger import recharge_logger
-from ..services.qrcode_util import make_qr_png_bytes
 from ..models import (
-    get_wallet, create_recharge_order, get_recharge_order,
-    get_ledger_amount_by_ref, get_user_balance,
+    create_recharge_order,
+    get_ledger_amount_by_ref,
+    get_recharge_order,
+    get_user_balance,
+    get_wallet,
 )
+from ..services.qrcode_util import make_qr_png_bytes
 from .common import fmt_amount, show_main_menu
 
 
@@ -31,7 +34,8 @@ async def show_recharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 二维码：缩小 50%，同时把地址写在图片下方（图上可见）
     caption_text = f"TRX/USDT-trc20 ONLY\n\n{addr}"
     png_bytes = make_qr_png_bytes(addr, scale=0.5, caption=caption_text)
-    bio = BytesIO(png_bytes); bio.name = "recharge_qr.png"
+    bio = BytesIO(png_bytes)
+    bio.name = "recharge_qr.png"
 
     expire_at = (datetime.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
     human = (
@@ -49,13 +53,25 @@ async def show_recharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{human}"
     )
 
-    kb = InlineKeyboardMarkup([  # 按钮在文本下
-        [InlineKeyboardButton("📋 复制地址", callback_data=f"recharge_copy:{order_id}")],
-        [InlineKeyboardButton("🔄 刷新状态", callback_data=f"recharge_status:{order_id}")],
-        [InlineKeyboardButton("⬅️ 返回主菜单", callback_data="back_to_menu")]
-    ])
+    kb = InlineKeyboardMarkup(
+        [  # 按钮在文本下
+            [
+                InlineKeyboardButton(
+                    "📋 复制地址", callback_data=f"recharge_copy:{order_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔄 刷新状态", callback_data=f"recharge_status:{order_id}"
+                )
+            ],
+            [InlineKeyboardButton("⬅️ 返回主菜单", callback_data="back_to_menu")],
+        ]
+    )
 
-    await update.message.reply_photo(photo=bio, caption=cap, reply_markup=kb, parse_mode="Markdown")
+    await update.message.reply_photo(
+        photo=bio, caption=cap, reply_markup=kb, parse_mode="Markdown"
+    )
     recharge_logger.info(f"🧾 用户 {u.id} 使用充值订单 {order_id}，地址 {addr}")
 
 
@@ -81,11 +97,13 @@ async def recharge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             oid = int(data.split(":")[1])
         except Exception:
-            await q.answer("订单号不合法", show_alert=True); return
+            await q.answer("订单号不合法", show_alert=True)
+            return
 
         order = await get_recharge_order(oid)
         if not order:
-            await q.answer("订单不存在或已过期", show_alert=True); return
+            await q.answer("订单不存在或已过期", show_alert=True)
+            return
 
         display = {
             "waiting": "等待用户转账",
@@ -102,10 +120,12 @@ async def recharge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         if st == "success":
             # 查询本单充值到账金额（从账变里按 ref 找）
-            amt = await get_ledger_amount_by_ref(user_id=order["user_id"],
-                                                ref_type="recharge",
-                                                ref_table="recharge_orders",
-                                                ref_id=order["id"])
+            amt = await get_ledger_amount_by_ref(
+                user_id=order["user_id"],
+                ref_type="recharge",
+                ref_table="recharge_orders",
+                ref_id=order["id"],
+            )
             bal = await get_user_balance(order["user_id"])
             if amt is not None:
                 lines.append(f"到账金额：**{fmt_amount(amt)} USDT**")

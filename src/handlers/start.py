@@ -1,7 +1,8 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from ..keyboards import MAIN_MENU
+
 from ..handlers.common import ensure_user_and_wallet
+from ..keyboards import MAIN_MENU
 
 WELCOME = (
     "🎉 欢迎使用 *USDT-TRC20 红包机器人* ！\n\n"
@@ -14,6 +15,9 @@ WELCOME = (
     "👇 请选择下方菜单开始体验。"
 )
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_and_wallet(update, context)
-    await update.message.reply_text(WELCOME, reply_markup=MAIN_MENU, parse_mode="Markdown")
+    await update.message.reply_text(
+        WELCOME, reply_markup=MAIN_MENU, parse_mode="Markdown"
+    )

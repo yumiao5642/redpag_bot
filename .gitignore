@@ -11,3 +11,5 @@ __pycache__/
 *$py.class
 # Misc
 .DS_Store
+chat_sync/
+chat_sync_bundle.tgz
