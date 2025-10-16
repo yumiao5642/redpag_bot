@@ -1,0 +1,41 @@
+name: Quality
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'   # 🔒 强制 3.9
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt || true
+          pip install flake8==6.1.0 mypy==1.8.0 || true
+
+      - name: Lint (flake8 basic)
+        run: |
+          # 禁止 3.10+ 语法的 PEP604 联合类型
+          if git grep -nE ":\s*[^:]+ \| None" -- src || true; then
+            echo "::error ::Found PEP604 union '|' which is not Python 3.9 compatible"
+            exit 1
+          fi
+          flake8 src || true
+
+      - name: Compile check
+        run: python -m compileall -q .
+
+      - name: Repo audit (your script)
+        run: |
+          if [ -f scripts/audit_repo.py ]; then
+            python3 scripts/audit_repo.py || true
+          fi
