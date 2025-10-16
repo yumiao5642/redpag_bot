@@ -1,0 +1,44 @@
+name: Chat Sync Bundle
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make chat bundle
+        run: |
+          mkdir -p chat_sync
+          echo "Commit: $(git rev-parse HEAD)" > chat_sync/GIT_HEAD.txt
+          echo "Date: $(date -u +'%F %T UTC')" >> chat_sync/GIT_HEAD.txt
+
+          # 生成源码快照（去掉虚拟环境、.git、重文件）
+          find src scripts -type f | sort > chat_sync/file_list.txt
+          # 逐文件拼接（谨慎大小；二进制跳过）
+          > chat_sync/all_file.txt
+          while IFS= read -r f; do
+            if file "$f" | grep -qi "text"; then
+              echo "=== $f ===" >> chat_sync/all_file.txt
+              cat "$f" >> chat_sync/all_file.txt
+              echo -e "\n" >> chat_sync/all_file.txt
+            fi
+          done < chat_sync/file_list.txt
+
+          # 你现有体检脚本
+          if [ -f scripts/audit_repo.py ]; then
+            python3 scripts/audit_repo.py > chat_sync/audit_report.txt || true
+          fi
+
+          tar czf chat_sync_bundle.tgz chat_sync
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-sync-bundle
+          path: chat_sync_bundle.tgz
