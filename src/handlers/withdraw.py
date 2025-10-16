@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes
 
 from ..config import MIN_WITHDRAW_USDT, WITHDRAW_FEE_FIXED
 from ..logger import withdraw_logger
+<<<<<<< HEAD
 from ..models import get_flag, get_wallet, list_user_addresses
 from .common import fmt_amount, show_main_menu
 
@@ -18,6 +19,11 @@ async def withdraw_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("提现功能开发中…")
     await show_main_menu(update.effective_chat.id, context)
 
+=======
+from .common import fmt_amount
+from ..models import get_flag
+from .common import show_main_menu
+>>>>>>> 441209c (feat(bot): 充值成功回显到账+余额；主菜单回显；功能锁(红包/提现)；地址查询增强；二维码缩放与CODE复制；仅私聊安全)
 
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
