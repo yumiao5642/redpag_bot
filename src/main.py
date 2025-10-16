@@ -3,7 +3,8 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 )
 from .config import BOT_TOKEN
-from .db import init_pool
+from .db import init_pool, close_pool
+
 from .handlers import start as h_start
 from .handlers import wallet as h_wallet
 from .handlers import red_packet as h_rp
@@ -16,6 +17,8 @@ from .handlers import addr_query as h_addrquery
 from .handlers import support as h_support
 from .handlers import password as h_password
 from .logger import app_logger
+from telegram import BotCommand, BotCommandScopeDefault
+
 
 async def on_text_router(update, context):
     text = (update.message.text or "").strip()
@@ -53,6 +56,30 @@ async def on_text_router(update, context):
     await h_addrbook.address_entry(update, context)
     await h_password.on_text(update, context)
     await h_addrquery.addr_query_ontext(update, context)
+
+
+async def _post_init(app):
+    await init_pool()
+    await app.bot.set_my_commands(
+        [
+            BotCommand("start", "开始 / 主菜单"),
+            BotCommand("wallet", "我的钱包"),
+            BotCommand("recharge", "充值"),
+            BotCommand("withdraw", "提现"),
+            BotCommand("records", "资金明细"),
+            BotCommand("addr", "地址查询"),
+            BotCommand("support", "联系客服"),
+            BotCommand("password", "设置/修改交易密码"),
+        ],
+        scope=BotCommandScopeDefault(),
+    )
+
+async def _post_shutdown(app):
+    await close_pool()
+
+app = Application.builder().token(BOT_TOKEN).build()
+app.post_init = _post_init
+app.post_shutdown = _post_shutdown
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()

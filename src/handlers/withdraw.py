@@ -7,7 +7,19 @@ from .common import fmt_amount
 from ..models import get_flag
 from .common import show_main_menu
 
+async def _guard_withdraw(update, context) -> bool:
+    try:
+        if (await get_flag("lock_withdraw")) == "1":
+            await update.effective_chat.send_message("维护中..请稍候尝试!")
+            await show_main_menu(update.effective_chat.id, context)
+            return True
+    except Exception:
+        pass
+    return False
+
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _guard_withdraw(update, context):
+        return
     u = update.effective_user
     wallet = await get_wallet(u.id)
     bal = wallet["usdt_trc20_balance"] if wallet else 0.0

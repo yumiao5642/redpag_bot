@@ -10,6 +10,18 @@ from ..keyboards import redpacket_inline_menu, redpacket_create_menu
 from ..services.redalgo import split_random, split_average
 from ..logger import redpacket_logger
 from ..handlers.common import ensure_user_and_wallet, fmt_amount
+from ..models import get_flag
+from .common import show_main_menu
+
+async def _guard_redpkt(update, context) -> bool:
+    try:
+        if (await get_flag("lock_redpkt")) == "1":
+            await update.effective_chat.send_message("维护中..请稍候尝试!")
+            await show_main_menu(update.effective_chat.id, context)
+            return True
+    except Exception:
+        pass
+    return False
 
 def _fmt_rp(r):
     return f"ID:{r['id']} | 类型:{r['type']} | 数量:{r['count']} | 总额:{fmt_amount(r['total_amount'])} | 状态:{r['status']}"
@@ -28,6 +40,8 @@ async def show_red_packets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), reply_markup=kb)
 
 async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _guard_redpkt(update, context):
+        return
     q = update.callback_query
     await q.answer()
     data = q.data or ""

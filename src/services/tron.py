@@ -13,6 +13,8 @@ from ..config import (
 from ..logger import collect_logger
 from tronpy.exceptions import TransactionNotFound
 
+TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "").split(",")[0].strip()
+
 
 def get_trx_balance(address: str) -> float:
     """
@@ -217,3 +219,33 @@ def is_valid_address(address: str) -> bool:
     if not _BASE58_RE.match(address):
         return False
     return True
+
+
+def get_trc20_balance(address: str, contract: str) -> float:
+    """读取任意 TRC20 合约余额（6 位精度按 USDT 处理）。"""
+    c = _get_client()  # 复用你文件里已有的 client 构造函数
+    token = c.get_contract(contract)
+    raw = token.functions.balanceOf(address)
+    val = int(raw) if isinstance(raw, int) else int(raw[0])
+    return val / 1_000_000.0
+
+def fetch_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
+    """近 10 笔 TRC20 转账（基于 TronGrid）。"""
+    if not TRONGRID_API_KEY:
+        return []
+    headers = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
+    url = f"https://api.trongrid.io/v1/accounts/{address}/transactions/trc20?limit={limit}"
+    r = requests.get(url, headers=headers, timeout=10)
+    r.raise_for_status()
+    data = r.json().get("data", [])
+    items = []
+    for it in data:
+        items.append({
+            "txid": it.get("transaction_id"),
+            "token": it.get("token_info", {}).get("symbol", "TRC20"),
+            "amount": float(it.get("value", 0)) / (10 ** int(it.get("token_info", {}).get("decimals", 6))),
+            "from": it.get("from"),
+            "to": it.get("to"),
+            "ts": int(it.get("block_timestamp", 0)) // 1000,
+        })
+    return items
