@@ -4,6 +4,32 @@ import random, string
 
 from .db import fetchone, fetchall, execute  # 导出 execute 供其他模块使用
 
+
+
+async def get_flag(k: str) -> Optional[str]:
+    row = await fetchone("SELECT v FROM sys_flags WHERE k=%s", (k,))
+    return row["v"] if row else None
+
+async def set_flag(k: str, v: str):
+    await execute("INSERT INTO sys_flags(k,v) VALUES(%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k,v))
+
+async def get_total_user_balance(asset: str) -> float:
+    row = await fetchone("SELECT COALESCE(SUM(usdt_balance),0) AS t FROM users", ())
+    # 若你的用户余额分表，请改对应聚合 SQL
+    return float(row["t"] if row and row["t"] is not None else 0.0)
+
+async def ledger_exists_for_ref(reason: str, ref_table: str, ref_id: int) -> bool:
+    row = await fetchone("SELECT id FROM ledger WHERE ref_table=%s AND ref_id=%s LIMIT 1", (ref_table, ref_id))
+    return bool(row)
+
+async def insert_ledger(user_id: int, asset: str, delta: float, before: float, after: float,
+                        reason: str, ref_table: str, ref_id: int):
+    await execute(
+        "INSERT INTO ledger(user_id, asset, change_amount, balance_before, balance_after, reason, ref_table, ref_id) "
+        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+        (user_id, asset, delta, before, after, reason, ref_table, ref_id)
+    )
+
 # =========================
 # 小工具
 # =========================

@@ -4,6 +4,8 @@ from ..models import get_wallet, list_user_addresses
 from ..config import MIN_WITHDRAW_USDT, WITHDRAW_FEE_FIXED
 from ..logger import withdraw_logger
 from .common import fmt_amount
+from ..models import get_flag
+from .common import show_main_menu
 
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user

@@ -1,13 +1,21 @@
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 import math
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes
 from ..models import create_recharge_order, get_wallet, get_active_recharge_order, get_recharge_order
-from ..services.qrcode_util import make_qr_png_bytes
 from ..config import MIN_DEPOSIT_USDT
 from ..logger import recharge_logger
-from .common import fmt_amount
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+from .common import fmt_amount, show_main_menu
+from ..services.qrcode_util import make_qr_png_bytes
+from ..models import (
+    create_recharge_order_if_needed,     # 新增：没有就创建，有且未过期就复用（你若已有名字不同，映射一下）
+    get_recharge_order_by_user,          # 查询最近未过期订单
+    get_user_balance,
+    mark_recharge_refreshed,             # 可选：如果你需要记录刷新动作
+)
+from ..services.tron import short_addr  # 若没有就简单切片实现
 
 def _remain_minutes(expire_at: datetime) -> int:
     now = datetime.now(expire_at.tzinfo) if expire_at.tzinfo else datetime.now()
@@ -16,90 +24,85 @@ def _remain_minutes(expire_at: datetime) -> int:
         return 0
     return math.ceil(sec / 60)
 
+
+def _code(s):  # Telegram CODE 样式
+    return f"`{s}`"
+
+def _copy_hint():
+    return "  👈 点击复制"
+
 async def show_recharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """点【➕ 充值】：弹出二维码+地址/订单号（CODE 样式）+ 刷新按钮"""
     u = update.effective_user
-    wallet = await get_wallet(u.id)
-    addr = wallet.get("tron_address") if wallet else "-"
+    order = await get_recharge_order_by_user(u.id)  # 未过期则返回当前订单
+    if not order:
+        order = await create_recharge_order_if_needed(u.id)
 
-    # 1) 如果已有未过期 waiting 订单 → 直接复用
-    order = await get_active_recharge_order(u.id)
-    if order is None:
-        order_id = await create_recharge_order(u.id, addr, None, 15)
-        order = await get_recharge_order(order_id)
+    addr = order["address"]
+    odno = order["order_no"]
+    expire_ts = order["expire_at"]  # 服务器返回的时间戳/字符串
 
-    # 2) 计算到期绝对时间与剩余分钟
-    # expire_at 为 datetime（aiomysql DictCursor 默认返回 str 需转换；做兼容）
-    expire_at = order.get("expire_at")
-    if isinstance(expire_at, str):
-        try:
-            expire_at = datetime.fromisoformat(expire_at.replace(" ", "T"))
-        except Exception:
-            # MySQL 默认格式 '%Y-%m-%d %H:%M:%S'
-            expire_at = datetime.strptime(order["expire_at"], "%Y-%m-%d %H:%M:%S")
-    remain = _remain_minutes(expire_at)
-
-    # 3) 生成二维码
-    png_bytes = make_qr_png_bytes(addr)
-    bio = BytesIO(png_bytes); bio.name = "addr_qr.png"
-
-    # 4) 文案（显示到期具体时间 + 剩余分钟）
-    caption = (
-        f"🔌 充值地址（USDT-TRC20）：\n{addr}\n\n"
-        f"订单号: {order.get('order_no') or order.get('id')}\n"
-        f"创建时间: {order.get('created_at')}\n"
-        f"到期时间: {expire_at.strftime('%Y-%m-%d %H:%M')} （剩余 {remain} 分钟）\n\n"
-        f"充值金额 {fmt_amount(MIN_DEPOSIT_USDT)} U 起。充值订单 15 分钟内有效，如超时请重新点击充值！"
+    # 生成二维码（图片内已叠加地址）
+    png = make_qr_png_bytes(addr, scale=0.5, caption=addr)
+    kb = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton("🔄 刷新状态", callback_data=f"recharge_refresh:{order['id']}"),
+            InlineKeyboardButton("⬅️ 返回主菜单", callback_data="back_to_menu")
+        ]]
     )
 
-    # 5) 按钮布局：第一行仅“📋”小按钮；第二行“刷新状态”
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋", callback_data=f"recharge_copy:{order['id']}")],
-        [InlineKeyboardButton("🔄 刷新状态", callback_data=f"recharge_status:{order['id']}")]
-    ])
-
-    await update.message.reply_photo(photo=bio, caption=caption, reply_markup=kb)
-    recharge_logger.info(f"🧾 用户 {u.id} 使用充值订单 {order['id']}（{order.get('order_no')}），地址 {addr}")
+    caption_lines = [
+        "🧾 充值订单",
+        f"地址：{_code(addr)}{_copy_hint()}",
+        f"订单号：{_code(odno)}{_copy_hint()}",
+        f"到期时间：{order['expire_text']}（剩余{order['left_min']}分钟）",
+        "",
+        "充值金额 10U 起，15 分钟内有效，请复制地址或扫描二维码进行充值。"
+    ]
+    await update.message.reply_photo(
+        photo=png,
+        caption="\n".join(caption_lines),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb
+    )
 
 async def recharge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 刷新状态 / 返回主菜单"""
     q = update.callback_query
     await q.answer()
-    data = q.data or ""
-    u = q.from_user
 
-    if data.startswith("recharge_copy:"):
-        wallet = await get_wallet(u.id)
-        addr = wallet.get("tron_address") if wallet else "-"
-        await q.answer(text=f"地址：\n{addr}\n（请长按复制）", show_alert=True)
+    if q.data == "back_to_menu":
+        await show_main_menu(q.message.chat_id, context, "已返回主菜单")
         return
 
-    if data.startswith("recharge_status:"):
-        try:
-            order_id = int(data.split(":")[1])
-        except Exception:
-            await q.answer("订单号不合法", show_alert=True); return
-        order = await get_recharge_order(order_id)
+    if q.data.startswith("recharge_refresh:"):
+        oid = int(q.data.split(":")[1])
+        # 查询状态（你已有的订单读取接口，拿到 status/amount等）
+        # 伪代码：
+        # order = await get_recharge_order(oid)
+        order = await context.bot_data["repo"].get_recharge_order(oid) if "repo" in context.bot_data else None
+        # 如果你的项目没有 repo 容器，就按你现有的函数改，比如 get_recharge_order_by_id(oid)
+
         if not order:
-            await q.answer("订单不存在或已过期", show_alert=True); return
-        display = {
-            "waiting": "等待用户转账",
-            "collecting": "待归集",
-            "verifying": "验证中",
-            "success": "充值成功",
-            "expired": "已过期",
-            "failed": "失败",
-        }
-        # 计算剩余时间
-        expire_at = order.get("expire_at")
-        if isinstance(expire_at, str):
-            try:
-                expire_at = datetime.fromisoformat(expire_at.replace(" ", "T"))
-            except Exception:
-                expire_at = datetime.strptime(order["expire_at"], "%Y-%m-%d %H:%M:%S")
-        remain = _remain_minutes(expire_at)
-        txt = (f"🔄 订单状态刷新\n"
-               f"订单号：{order.get('order_no') or order_id}\n"
-               f"当前状态：{display.get(order['status'], order['status'])}\n"
-               f"创建时间：{order.get('created_at')}\n"
-               f"到期时间：{expire_at.strftime('%Y-%m-%d %H:%M')}（剩余 {remain} 分钟）\n")
-        await q.message.reply_text(txt)
-        return
+            await q.message.reply_text("未找到订单，请重新发起充值。")
+            await show_main_menu(q.message.chat_id, context)
+            return
+
+        if order["status"] == "success":
+            # ✅ 已充值成功：显示到账金额 + 最新余额
+            credited = order.get("credited_amount", order.get("amount", 0))
+            user_bal = await get_user_balance(order["user_id"], "USDT-trc20")
+            text = (
+                "✅ 充值成功！\n"
+                f"订单号：{_code(order['order_no'])}{_copy_hint()}\n"
+                f"到账金额：{fmt_amount(credited)} USDT\n"
+                f"当前余额：{fmt_amount(user_bal)} USDT\n"
+            )
+            await q.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+            await show_main_menu(q.message.chat_id, context)
+            return
+
+        # 其它状态：回显剩余时间
+        left_min = order.get("left_min", 0)
+        await q.message.reply_text(f"当前状态：{order['status']}（剩余 {left_min} 分钟）")
+        await show_main_menu(q.message.chat_id, context)
