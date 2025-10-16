@@ -12,6 +12,8 @@ from ..config import (
 )
 from ..logger import collect_logger
 from tronpy.exceptions import TransactionNotFound
+from typing import List, Dict
+import os, requests
 
 TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "").split(",")[0].strip()
 
