@@ -1,7 +1,8 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ..models import get_wallet
+from ..models import ensure_user, get_wallet
+from ..services.format import fmt_amount  # 若无该工具，直接 f"{x:.2f}"
 from ..keyboards import WALLET_MENU
 from .common import fmt_amount
 
@@ -10,24 +11,19 @@ from .common import fmt_amount
 
 async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
+    await ensure_user(u.id, u.username or "", u.first_name or "", u.last_name or "")
+
     wallet = await get_wallet(u.id)
+    bal = (wallet or {}).get("usdt_trc20_balance", 0.0)
+    bal_str = f"{float(bal):.2f}"
 
-    bal = fmt_amount(wallet["usdt_trc20_balance"] if wallet else 0.0)
-
-    # 统一风格、两位小数；取消充值地址行
     text = (
-        "📟 我的钱包\n"
+        f"👛 我的钱包\n"
         f"账户ID：`{u.id}`\n\n"
-        "账户余额：\n"
-        f"• USDT-trc20：{bal}\n\n"
-        "请选择功能："
+        f"账户余额：\n"
+        f"• USDT-TRC20：*{bal_str}*\n"
     )
-
-    await update.message.reply_text(
-        text,
-        reply_markup=WALLET_MENU,
-        parse_mode="Markdown"
-    )
+    await update.message.reply_markdown(text)
 
 # 若你后续确实需要“我的钱包(my_wallet)”的另一种展示方式，
 # 可以用现有模型接口封装一个不依赖 get_or_create_user / get_user_balance 的版本。

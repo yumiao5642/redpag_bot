@@ -2,20 +2,60 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 import math
 from ..models import create_recharge_order, get_wallet, get_active_recharge_order, get_recharge_order
-from ..config import MIN_DEPOSIT_USDT
 from ..logger import recharge_logger
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
-from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
 from .common import fmt_amount, show_main_menu
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes
+
+from ..config import MIN_DEPOSIT_USDT
 from ..services.qrcode_util import make_qr_png_bytes
-from ..models import (
-    create_recharge_order_if_needed,     # 新增：没有就创建，有且未过期就复用（你若已有名字不同，映射一下）
-    get_recharge_order_by_user,          # 查询最近未过期订单
-    get_user_balance,
-    mark_recharge_refreshed,             # 可选：如果你需要记录刷新动作
-)
+from ..services.format import fmt_amount
 from ..services.tron import short_addr  # 若没有就简单切片实现
+from ..models import (
+    get_active_recharge_order,   # 如你仓库没有，下面 helper 有 fallback
+    create_recharge_order,
+    get_recharge_order,
+    get_wallet,
+)
+from ..db import fetchone  # 若 models 缺 get_active_recharge_order，会用到
+
+
+async def create_recharge_order_if_needed(user_id: int, expire_minutes: int = 15):
+    """
+    如果存在未过期 waiting 订单，则直接复用；
+    否则创建一个新的充值订单并返回。
+    """
+    # 1) 优先走 models 已有能力
+    try:
+        if get_active_recharge_order:  # type: ignore
+            existing = await get_active_recharge_order(user_id)
+            if existing:
+                return existing
+    except Exception:
+        pass
+
+    # 2) fallback：直接查库
+    row = await fetchone(
+        """
+        SELECT id
+          FROM recharge_orders
+         WHERE user_id=%s AND status='waiting' AND expires_at>NOW()
+         ORDER BY id DESC LIMIT 1
+        """,
+        (user_id,),
+    )
+    if row and row.get("id"):
+        return await get_recharge_order(row["id"])
+
+    # 3) 没有可复用订单 -> 创建新订单
+    wallet = await get_wallet(user_id)
+    tron_addr = (wallet or {}).get("tron_address")
+    if not tron_addr:
+        raise RuntimeError("该账户尚未生成专属充值地址，请联系管理员初始化钱包。")
+
+    oid = await create_recharge_order(user_id, tron_addr, expected_amount=None, expire_minutes=expire_minutes)
+    return await get_recharge_order(oid)
 
 def _remain_minutes(expire_at: datetime) -> int:
     now = datetime.now(expire_at.tzinfo) if expire_at.tzinfo else datetime.now()

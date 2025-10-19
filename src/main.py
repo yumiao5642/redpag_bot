@@ -78,6 +78,7 @@ async def _post_shutdown(app):
     await close_pool()
 
 app = Application.builder().token(BOT_TOKEN).build()
+app.run_polling(post_init=_post_init, post_shutdown=_post_shutdown)
 app.post_init = _post_init
 app.post_shutdown = _post_shutdown
 
