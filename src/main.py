@@ -2,6 +2,7 @@ import asyncio
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 )
+from telegram import BotCommand, BotCommandScopeDefault
 from .config import BOT_TOKEN
 from .db import init_pool, close_pool
 
@@ -17,7 +18,6 @@ from .handlers import addr_query as h_addrquery
 from .handlers import support as h_support
 from .handlers import password as h_password
 from .logger import app_logger
-from telegram import BotCommand, BotCommandScopeDefault
 
 
 async def on_text_router(update, context):
@@ -51,14 +51,14 @@ async def on_text_router(update, context):
     if text.startswith("⬅️ 返回主菜单") or text.startswith("返回主菜单"):
         return await h_start.start(update, context)
 
-    # 其他输入流
+    # 其他输入流（注意：修正为 on_text）
     await h_rp.on_user_text(update, context)
     await h_addrbook.address_entry(update, context)
     await h_password.on_text(update, context)
-    await h_addrquery.addr_query_ontext(update, context)
+    await h_addrquery.on_text(update, context)
 
 
-async def _post_init(app):
+async def _startup(app):
     await init_pool()
     await app.bot.set_my_commands(
         [
@@ -73,28 +73,36 @@ async def _post_init(app):
         ],
         scope=BotCommandScopeDefault(),
     )
+    app_logger.info("🚀 机器人已启动，等待消息...")
 
-async def _post_shutdown(app):
+async def _shutdown(app):
     await close_pool()
-
-app = Application.builder().token(BOT_TOKEN).build()
-app.run_polling(post_init=_post_init, post_shutdown=_post_shutdown)
-app.post_init = _post_init
-app.post_shutdown = _post_shutdown
+    app_logger.info("🛑 机器人已关闭。")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Commands
     app.add_handler(CommandHandler("start", h_start.start))
+    app.add_handler(CommandHandler("wallet", h_wallet.show_wallet))
+    app.add_handler(CommandHandler("recharge", h_recharge.show_recharge))
+    app.add_handler(CommandHandler("withdraw", h_withdraw.show_withdraw))
+    app.add_handler(CommandHandler("records", h_ledger.show_ledger))
+    app.add_handler(CommandHandler("addr", h_addrquery.addr_query))
+    app.add_handler(CommandHandler("support", h_support.show_support))
+    app.add_handler(CommandHandler("password", h_password.set_password))
+
+    # CallbackQuery：红包 / 充值 / 提现 / 密码键盘 / 返回主菜单
     app.add_handler(CallbackQueryHandler(h_rp.rp_callback, pattern=r"^rp_"))
-    app.add_handler(CallbackQueryHandler(h_recharge.recharge_callback, pattern=r"^recharge_"))
+    app.add_handler(CallbackQueryHandler(h_recharge.recharge_callback, pattern=r"^(recharge_|back_to_menu$)"))
     app.add_handler(CallbackQueryHandler(h_withdraw.withdraw_callback, pattern=r"^withdraw_"))
+    app.add_handler(CallbackQueryHandler(h_password.password_kb_callback, pattern=r"^pwd:"))
+
+    # 普通文本路由
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_router))
 
-    async def _startup(_):
-        await init_pool()
-        app_logger.info("🚀 机器人已启动，等待消息...")
     app.post_init = _startup
+    app.post_shutdown = _shutdown
 
     app.run_polling(close_loop=False)
 

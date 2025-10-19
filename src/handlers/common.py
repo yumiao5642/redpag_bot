@@ -43,8 +43,3 @@ async def show_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, text:
         text = "👇 请选择功能："
     await context.bot.send_message(chat_id, text, reply_markup=MAIN_KB)
 
-def fmt_amount(x):
-    try:
-        return f"{float(x):.2f}"
-    except Exception:
-        return "0.00"
