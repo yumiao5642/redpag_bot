@@ -153,8 +153,7 @@ async def _precheck_and_prepare(
         )
         return False, usdt_bal
 
-    # —— 能量保障：不足就租 —— #
-    # （略：保留你原来的逻辑，可接在这里）
+    # —— 可在此补充能量自动租赁 / TRX 补带宽的预处理 —— #
     return True, usdt_bal
 
 
@@ -210,12 +209,11 @@ async def _collect_and_book(uid: int, addr: str, oid: int, order_no: str):
 
     await set_recharge_status(oid, "verifying", txid)
 
-    # 幂等记账
+    # 幂等记账（兼容旧签名）
     if not await ledger_exists_for_ref("recharge", "recharge_orders", oid):
         before = Decimal(str(wallet["usdt_trc20_balance"] or 0)) if wallet else Decimal("0")
         after = before + Decimal(str(bal))
         await update_wallet_balance(uid, float(after))
-        # 兼容老调用：ref_type 留空则用 change_type
         await add_ledger(
             uid,
             "recharge",

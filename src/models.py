@@ -20,7 +20,7 @@ def make_order_no(dt: Optional[datetime] = None) -> str:
 
 
 # =========================
-# 系统开关
+# 系统开关 / KV
 # =========================
 async def get_flag(k: str) -> Optional[str]:
     row = await fetchone("SELECT v FROM sys_flags WHERE k=%s", (k,))
@@ -37,7 +37,7 @@ async def set_flag(k: str, on: bool) -> None:
 
 
 # =========================
-# 用户
+# 用户 / 交易密码（多形态兼容）
 # =========================
 async def get_or_create_user(tg_id: int, username: str) -> Dict[str, Any]:
     """
@@ -70,6 +70,74 @@ async def ensure_user(
 
 async def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     return await fetchone("SELECT * FROM users WHERE id=%s", (user_id,))
+
+
+async def set_tx_password_hash(user_id: int, hash_str: str) -> None:
+    """
+    保存交易密码哈希（兼容三种落库方式，按顺序）：
+    1) users.tx_password_hash 字段
+    2) user_tx_passwords(user_id, tx_password_hash, updated_at)
+    3) sys_flags(k='txpw:<uid>', v=hash)
+    """
+    # 方案 1：users.tx_password_hash
+    try:
+        n = await execute("UPDATE users SET tx_password_hash=%s WHERE id=%s", (hash_str, user_id))
+        # 若没有该列会抛异常；若行不存在/影响行数为0也不致命，继续尝试下一种
+        if n >= 0:
+            return
+    except Exception:
+        pass
+
+    # 方案 2：独立表
+    try:
+        await execute(
+            "INSERT INTO user_tx_passwords(user_id, tx_password_hash, updated_at) "
+            "VALUES(%s,%s,NOW()) "
+            "ON DUPLICATE KEY UPDATE tx_password_hash=VALUES(tx_password_hash), updated_at=NOW()",
+            (user_id, hash_str),
+        )
+        return
+    except Exception:
+        pass
+
+    # 方案 3：sys_flags 作为兜底
+    key = f"txpw:{user_id}"
+    await execute(
+        "INSERT INTO sys_flags(k,v) VALUES(%s,%s) "
+        "ON DUPLICATE KEY UPDATE v=VALUES(v), updated_at=NOW()",
+        (key, hash_str),
+    )
+
+
+async def get_user_tx_password_hash(user_id: int) -> Optional[str]:
+    """
+    读取交易密码哈希（与 set_tx_password_hash 对应的三层读取）。
+    """
+    # 方案 1：users.tx_password_hash
+    try:
+        row = await fetchone("SELECT tx_password_hash FROM users WHERE id=%s", (user_id,))
+        if row is not None and "tx_password_hash" in row and row["tx_password_hash"]:
+            return str(row["tx_password_hash"])
+    except Exception:
+        pass
+
+    # 方案 2：独立表
+    try:
+        row = await fetchone("SELECT tx_password_hash FROM user_tx_passwords WHERE user_id=%s", (user_id,))
+        if row and row.get("tx_password_hash"):
+            return str(row["tx_password_hash"])
+    except Exception:
+        pass
+
+    # 方案 3：sys_flags 兜底
+    try:
+        row = await fetchone("SELECT v FROM sys_flags WHERE k=%s", (f"txpw:{user_id}",))
+        if row and row.get("v"):
+            return str(row["v"])
+    except Exception:
+        pass
+
+    return None
 
 
 # =========================
@@ -219,7 +287,7 @@ async def list_recharge_verifying() -> List[Dict[str, Any]]:
 
 
 # =========================
-# 账变 ledger
+# 账变 ledger（兼容旧签名）
 # =========================
 async def add_ledger(
     user_id: int,
@@ -319,7 +387,7 @@ async def get_user_address_by_alias(
 
 
 # =========================
-# 红包（略：保持你原有实现）
+# 红包
 # =========================
 async def list_red_packets(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     return await fetchall(
