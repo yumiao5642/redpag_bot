@@ -54,7 +54,12 @@ async def fetchall(sql: str, args: Tuple = ()) -> List[Dict[str, Any]]:
 
 
 async def execute(sql: str, args: Tuple = ()) -> int:
+    """
+    返回：
+    - INSERT：lastrowid
+    - UPDATE/DELETE：受影响行数 rowcount
+    """
     async with await get_conn() as conn:
         async with conn.cursor() as cur:
             await cur.execute(sql, args)
-            return cur.lastrowid or 0
+            return int(cur.lastrowid) if cur.lastrowid else int(cur.rowcount)

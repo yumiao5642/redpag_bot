@@ -1,21 +1,22 @@
-from telegram import Update
-from telegram.ext import ContextTypes
 from typing import Optional
 from telegram import (
-    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, Update
 )
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
+
 from ..models import ensure_user, get_wallet, set_tron_wallet
 from ..services.tron import generate_address
 from ..services.encryption import encrypt_text
 from ..logger import user_click_logger, app_logger
 
+
 def fmt_amount(x) -> str:
     try:
         return f"{float(x):.2f}"
     except Exception:
-        return str(x)
+        return "0.00"
+
 
 async def ensure_user_and_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
@@ -42,9 +43,3 @@ async def show_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, text:
     if not text:
         text = "👇 请选择功能："
     await context.bot.send_message(chat_id, text, reply_markup=MAIN_KB)
-
-def fmt_amount(x):
-    try:
-        return f"{float(x):.2f}"
-    except Exception:
-        return "0.00"

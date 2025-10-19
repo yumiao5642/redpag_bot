@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
+import hashlib
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from .common import show_main_menu
 from ..services.encryption import hash_password
 from ..models import set_tx_password_hash, get_user_tx_password_hash
+from ..logger import password_logger
 
 _NUMPAD = InlineKeyboardMarkup([
     [InlineKeyboardButton("1", callback_data="pwd:1"), InlineKeyboardButton("2", callback_data="pwd:2"), InlineKeyboardButton("3", callback_data="pwd:3")],
@@ -18,7 +20,7 @@ async def start_set_password(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 def _hash_pw(user_id: int, pw: str) -> str:
-    # 简单盐：user_id + sha256
+    # 简单盐：user_id + sha256（兼容保留）
     return hashlib.sha256(f"{user_id}:{pw}".encode()).hexdigest()
 
 async def set_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,6 +37,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_tx_password_hash(u.id, hpw)
         password_logger.info(f"🔑 用户 {u.id} 设置/修改了交易密码")
         await update.message.reply_text("交易密码设置成功！")
+        await show_main_menu(update.effective_chat.id, context)
         return
 
 
