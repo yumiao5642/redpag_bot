@@ -12,3 +12,4 @@ __pycache__/
 # Misc
 .DS_Store
 chat_sync_bundle*
+chat_sync/
