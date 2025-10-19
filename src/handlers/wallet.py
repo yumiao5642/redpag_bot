@@ -5,8 +5,6 @@ from ..models import ensure_user, get_wallet
 from ..keyboards import WALLET_MENU
 from .common import fmt_amount
 
-# 仅保留 show_wallet；取消显示“充值地址（专属）”
-
 async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     await ensure_user(u.id, u.username or "", u.first_name or "", u.last_name or "")
@@ -21,4 +19,4 @@ async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"账户余额：\n"
         f"• USDT-TRC20：*{bal_str}*\n"
     )
-    await update.message.reply_markdown(text)
+    await update.message.reply_markdown(text, reply_markup=WALLET_MENU)

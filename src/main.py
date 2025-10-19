@@ -51,9 +51,8 @@ async def on_text_router(update, context):
     if text.startswith("⬅️ 返回主菜单") or text.startswith("返回主菜单"):
         return await h_start.start(update, context)
 
-    # 其他输入流（注意：修正为 on_text）
+    # 其他输入流（只路由到需要的 on_text）
     await h_rp.on_user_text(update, context)
-    await h_addrbook.address_entry(update, context)
     await h_password.on_text(update, context)
     await h_addrquery.on_text(update, context)
 

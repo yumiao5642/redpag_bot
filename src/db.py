@@ -40,7 +40,19 @@ async def fetchall(sql: str, args: Tuple = ()) -> List[Dict[str, Any]]:
             return await cur.fetchall()
 
 async def execute(sql: str, args: Tuple = ()) -> int:
+    """
+    兼容 INSERT：返回 lastrowid（若可用）；UPDATE/DELETE 场景不保证准确数量。
+    """
     async with (await get_conn()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(sql, args)
             return cur.lastrowid or 0
+
+async def execute_rowcount(sql: str, args: Tuple = ()) -> int:
+    """
+    返回受影响行数，适合 UPDATE / DELETE 精确统计。
+    """
+    async with (await get_conn()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(sql, args)
+            return cur.rowcount or 0
