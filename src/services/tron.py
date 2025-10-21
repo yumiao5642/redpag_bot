@@ -205,12 +205,11 @@ def is_valid_address(address: str) -> bool:
 async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
     """
     读取地址最近 TRC20 转账（基于 TronGrid v1）。
-    返回字段：hash/from/to/amount/asset
+    返回字段：hash/from/to/amount/asset/ts(秒)
     """
     def _fetch():
         headers = {}
         if TRONGRID_API_KEY:
-            # 兼容多个 key，随便取第一个
             k = TRONGRID_API_KEY.split(",")[0].strip()
             if k:
                 headers["TRON-PRO-API-KEY"] = k
@@ -223,7 +222,6 @@ async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
             v = it.get("token_info", {}) or {}
             decimals = int(v.get("decimals", 6))
             sym = v.get("symbol", "USDT")
-            # 部分返回结构在 data 顶层也有 from/to/value
             _from = it.get("from") or it.get("value", {}).get("from", "")
             _to = it.get("to") or it.get("value", {}).get("to", "")
             raw_val = it.get("value") if isinstance(it.get("value"), str) else it.get("value", {}).get("value", 0)
@@ -231,14 +229,41 @@ async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
                 amount = float(raw_val) / (10 ** decimals)
             except Exception:
                 amount = 0.0
+            ts_ms = it.get("block_timestamp") or 0
+            ts = int(ts_ms // 1000) if ts_ms else 0
             out.append({
                 "hash": it.get("transaction_id", ""),
                 "from": _from,
                 "to": _to,
                 "amount": amount,
                 "asset": sym,
+                "ts": ts,
             })
         return out
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _fetch)
+
+# ========== 地址风险查询（占位/扩展点） ==========
+async def get_address_risk(address: str) -> Dict:
+    """
+    返回示例：
+      { "level": "低/中/高/已标记诈骗/交易所/混币/赌博/未知", "tags": ["scam","blacklist"] }
+
+    你可以按需对接以下来源（任选其一或多个聚合）：
+    1) TronScan：查询地址标签/风险（需抓取其公开 API 或使用其企业接口）
+       - 思路：GET https://apilist.tronscanapi.com/api/account?address=...
+       - 解析返回中的 tags / risk_score 等（字段可能随时间变化）
+    2) OKLink API：/api/v5/explorer/address/address-label（需 API Key）
+       - 可获取地址标签（交易所/黑名单等），据此映射 level
+    3) GoPlus Security：有多链地址安全画像（需注册）
+    4) Chainabuse / PhishFort / Scamsniffer：社区举报黑名单（需各自接口）
+    5) 自建黑名单：维护你业务已确认的恶意地址清单
+
+    下面默认返回“未知”。接入任意接口后，把返回映射到统一结构即可。
+    """
+    try:
+        # TODO: 在此处实现实际的 HTTP 调用与字段映射
+        return {"level": "未知", "tags": []}
+    except Exception:
+        return {"level": "未知", "tags": []}

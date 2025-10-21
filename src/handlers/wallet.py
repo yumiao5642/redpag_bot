@@ -19,4 +19,5 @@ async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"账户余额：\n"
         f"• USDT-TRC20：*{bal_str}*\n"
     )
-    await update.message.reply_markdown(text, reply_markup=WALLET_MENU)
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id, text, reply_markup=WALLET_MENU, parse_mode="Markdown")
