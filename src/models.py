@@ -30,9 +30,10 @@ async def get_total_user_balance(asset: str) -> float:
 def _rand_letters(n: int = 4) -> str:
     return ''.join(random.choice(string.ascii_lowercase) for _ in range(n))
 
-def make_order_no(dt: Optional[datetime] = None) -> str:
+def make_order_no(dt: Optional[datetime] = None, prefix: str = "") -> str:
     dt = dt or datetime.now()
-    return dt.strftime('%Y%m%d%H%M') + _rand_letters(4)
+    return (prefix or "") + dt.strftime('%Y%m%d%H%M') + _rand_letters(4)
+
 
 # ===== 充值订单 =====
 
@@ -45,7 +46,7 @@ async def get_active_recharge_order(user_id: int) -> Optional[Dict[str, Any]]:
     )
 
 async def create_recharge_order(user_id: int, address: str, expected_amount: Optional[float], expire_minutes: int) -> int:
-    order_no = make_order_no()
+    order_no = make_order_no(prefix="charge_")
     sql = (
         "INSERT INTO recharge_orders(order_no, user_id, address, expected_amount, status, created_at, expire_at) "
         "VALUES(%s,%s,%s,%s,'waiting',NOW(), DATE_ADD(NOW(), INTERVAL %s MINUTE))"
@@ -209,7 +210,7 @@ async def soft_delete_user_address(user_id: int, text: str) -> int:
     )
     if n1:
         return n1
-    return await execute(
+    return await execute_rowcount(
         "UPDATE user_addresses SET status='deleted' "
         "WHERE user_id=%s AND status='active' AND address LIKE %s",
         (user_id, f"%{text}%")
@@ -239,9 +240,8 @@ async def list_red_packets(user_id: int, limit: int = 10) -> List[Dict[str, Any]
 async def create_red_packet(user_id: int, rp_type: str, total_amount: float, count: int,
                             currency: Optional[str], cover_text: Optional[str], exclusive_user_id: Optional[int]) -> int:
     currency = currency or "USDT-trc20"
-    # 初始状态：created（与表枚举一致）
-    sql = ("INSERT INTO red_packets(owner_id, type, total_amount, count, currency, cover_text, exclusive_user_id, status, created_at) "
-           "VALUES(%s,%s,%s,%s,%s,%s,%s,'created',NOW())")
+    sql = ("INSERT INTO red_packets(owner_id, type, total_amount, count, currency, cover_text, exclusive_user_id, status, created_at, expires_at) "
+           "VALUES(%s,%s,%s,%s,%s,%s,%s,'created',NOW(), DATE_ADD(NOW(), INTERVAL 24 HOUR))")
     new_id = await execute(sql, (user_id, rp_type, total_amount, count, currency, cover_text, exclusive_user_id))
     return new_id
 
@@ -351,4 +351,31 @@ async def mark_energy_rent_used(address: str) -> None:
     await execute(
         "UPDATE energy_rent_logs SET status='used' WHERE address=%s AND status='active'",
         (address,),
+    )
+
+async def list_user_active_red_packets(user_id: int):
+    return await fetchall(
+        "SELECT * FROM red_packets "
+        "WHERE owner_id=%s "
+        "  AND status IN ('created','paid','sent') "
+        "  AND (expires_at IS NULL OR expires_at>NOW())",
+        (user_id,)
+    )
+
+async def sum_claimed_amount(rp_id: int) -> float:
+    row = await fetchone(
+        "SELECT COALESCE(SUM(amount),0) AS s FROM red_packet_shares WHERE red_packet_id=%s AND claimed_by IS NOT NULL",
+        (rp_id,)
+    )
+    return float(row["s"] if row else 0.0)
+
+async def list_expired_red_packets(limit: int = 200) -> List[Dict[str, Any]]:
+    """
+    过期定义：状态为 paid/sent 且 expires_at <= NOW()
+    """
+    return await fetchall(
+        "SELECT * FROM red_packets "
+        "WHERE status IN ('paid','sent') AND expires_at IS NOT NULL AND expires_at <= NOW() "
+        "ORDER BY id ASC LIMIT %s",
+        (limit,)
     )

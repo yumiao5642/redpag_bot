@@ -6,6 +6,9 @@ from ..services.encryption import hash_password, verify_password
 from ..models import set_tx_password_hash, get_tx_password_hash
 from ..logger import password_logger
 from telegram.error import BadRequest
+from datetime import date
+import random
+
 
 # 键盘布局（尽量贴近截图）：三行 + 底部“取消 / 数字3 / 👁”
 _PWD_KBD = InlineKeyboardMarkup([
@@ -23,9 +26,26 @@ _PWD_KBD = InlineKeyboardMarkup([
      InlineKeyboardButton("👁", callback_data="pwd:TOGGLE")],
     [InlineKeyboardButton("⌫ 退格", callback_data="pwd:BK")]
 ])
-def _kbd():
-    return _PWD_KBD
 
+def _kbd():
+    today = date.today().isoformat()
+    rnd = random.Random(today)
+    digits = [str(i) for i in range(10)]
+    rnd.shuffle(digits)
+    grid = [digits[:3], digits[3:6], digits[6:9]]
+    last = digits[9]
+    rows = []
+    for row in grid:
+        rows.append([InlineKeyboardButton(row[0], callback_data=f"pwd:{row[0]}"),
+                     InlineKeyboardButton(row[1], callback_data=f"pwd:{row[1]}"),
+                     InlineKeyboardButton(row[2], callback_data=f"pwd:{row[2]}")])
+    rows.append([
+        InlineKeyboardButton("取消", callback_data="pwd:CANCEL"),
+        InlineKeyboardButton(last, callback_data=f"pwd:{last}"),
+        InlineKeyboardButton("👁", callback_data="pwd:TOGGLE")
+    ])
+    rows.append([InlineKeyboardButton("⌫ 退格", callback_data="pwd:BK")])
+    return InlineKeyboardMarkup(rows)
 
 def _mask(s: str, vis: bool) -> str:
     if vis:
@@ -49,6 +69,8 @@ async def set_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     msg = _render(context.user_data["pwd_flow"]["stage"], "", False)
     await update.message.reply_text(msg, reply_markup=_kbd())
+    from ..logger import password_logger
+    password_logger.info("🔐 进入设置/修改交易密码：用户=%s，是否已有旧密码=%s", u.id, has_old)
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 保留：如果未来需要纯文本模式可在此接管；当前键盘模式即可
@@ -70,10 +92,11 @@ async def password_kb_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             if (q.message.text or "").strip() == txt.strip():
                 return
-            return q.edit_message_text(txt, reply_markup=_PWD_KBD)
+            return q.edit_message_text(txt, reply_markup=_kbd())
         except BadRequest as e:
             if "Message is not modified" not in str(e):
                 raise
+
 
     key = q.data.split(":",1)[1]
     if key == "CANCEL":

@@ -1,6 +1,6 @@
 import asyncio
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, filters
 )
 from telegram import BotCommand, BotCommandScopeDefault, Update
 from telegram.request import HTTPXRequest
@@ -142,10 +142,11 @@ def main():
     app.add_handler(CallbackQueryHandler(h_withdraw.withdraw_callback, pattern=r"^withdraw_"))
     app.add_handler(CallbackQueryHandler(h_password.password_kb_callback, pattern=r"^pwd:"))
     app.add_handler(CallbackQueryHandler(h_addrbook.address_kb_callback, pattern=r"^addrbook"))
+    app.add_handler(InlineQueryHandler(h_rp.inlinequery_handle))
 
     # 普通文本路由
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_router))
-
+    app.add_handler(CallbackQueryHandler(h_withdraw.wdpwd_callback, pattern=r"^wdpwd:"))
     app.add_handler(CallbackQueryHandler(h_common.cancel_any_input, pattern=r"^cancel"))
 
     app.post_init = _startup

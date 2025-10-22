@@ -9,7 +9,7 @@ from ..models import (
     get_total_user_balance, get_ledger_by_ref, set_flag
 )
 from ..config import MIN_DEPOSIT_USDT, AGGREGATE_ADDRESS, BOT_TOKEN
-from ..logger import collect_logger
+from ..logger import collect_logger, redpacket_logger
 from ..services.energy import rent_energy
 from ..services.encryption import decrypt_text
 from ..services.tron import (
@@ -19,6 +19,48 @@ from ..services.tron import (
     get_trx_balance,
     send_trx,
 )
+
+
+async def _auto_refund_expired_red_packets(counters: dict):
+    """
+    查找超过 24 小时（expires_at 已到）仍非 finished 的红包：
+    - 计算未领取余额 = total - 已领取之和
+    - 退回创建人余额、记账 ledger(redpacket_refund)
+    - 状态置为 finished
+    """
+    from decimal import Decimal
+    from ..models import (
+        list_expired_red_packets, sum_claimed_amount, get_wallet,
+        update_wallet_balance, add_ledger, set_red_packet_status
+    )
+
+    recs = await list_expired_red_packets(limit=200)
+    n = 0
+    total_refund = Decimal("0")
+
+    for r in recs:
+        rp_id = r["id"]; owner = r["owner_id"]
+        total = Decimal(str(r["total_amount"]))
+        claimed = Decimal(str(await sum_claimed_amount(rp_id)))
+        remain = total - claimed
+        if remain > 0:
+            wallet = await get_wallet(owner)
+            before = Decimal(str((wallet or {}).get("usdt_trc20_balance", 0)))
+            after = before + remain
+            await update_wallet_balance(owner, float(after))
+            await add_ledger(owner, "redpacket_refund", float(remain), float(before), float(after),
+                             "red_packets", rp_id, "红包超过24小时未领取自动退款")
+            total_refund += remain
+
+        await set_red_packet_status(rp_id, "finished")
+        n += 1
+        redpacket_logger.info(
+            "🧧[自动回收] 红包ID=%s 创建人=%s 类型=%s 总额=%.6f 已领=%.6f 退款=%.6f -> 设为 finished",
+            rp_id, owner, r.get("type"), float(total), float(claimed), float(max(remain, Decimal('0')))
+        )
+
+    counters["rp_auto_refunded"] = n
+    counters["rp_auto_refunded_sum"] = float(total_refund)
 
 # ✅ 与表结构一致：waiting 过期后置为 expired（不是 timeout）
 EXPIRE_SQL = "UPDATE recharge_orders SET status='expired' WHERE status='waiting' AND expire_at <= NOW()"
@@ -218,7 +260,8 @@ async def main_once():
     t0 = time.time()
     counters = {"timeout_marked": 0, "waiting_total": 0, "waiting_skip": 0,
                 "collecting_total": 0, "collecting_to_verifying": 0,
-                "verifying_total": 0, "verifying_to_success": 0, "ledger_add": 0}
+                "verifying_total": 0, "verifying_to_success": 0, "ledger_add": 0,
+                "rp_auto_refunded": 0, "rp_auto_refunded_sum": 0.0}
 
     await init_pool()
     try:
@@ -226,7 +269,7 @@ async def main_once():
         counters["timeout_marked"] = n
 
         waitings = await list_recharge_waiting(); counters["waiting_total"] = len(waitings)
-        for o in waitings: 
+        for o in waitings:
             try: await process_waiting(o, counters)
             except Exception as e: collect_logger.exception(f"waiting {o.get('id')} 异常：{e}")
 
@@ -240,6 +283,12 @@ async def main_once():
             try: await process_verifying(o, counters)
             except Exception as e: collect_logger.exception(f"verifying {o.get('id')} 异常：{e}")
 
+        # 🔁 自动回收过期红包（超 24 小时）
+        try:
+            await _auto_refund_expired_red_packets(counters)
+        except Exception as e:
+            collect_logger.exception(f"自动回收红包异常：{e}")
+
         # 对账（异常上锁）
         try:
             user_total = await get_total_user_balance("USDT-trc20")
@@ -252,7 +301,12 @@ async def main_once():
             collect_logger.exception(f"对账检查异常：{e}")
 
         dur = time.time() - t0
-        collect_logger.info(f"📊 本轮统计：expired标记={counters['timeout_marked']} 等待={counters['waiting_total']} 收集中={counters['collecting_total']} 待验证={counters['verifying_total']} 用时{dur:.2f}s")
+        collect_logger.info(
+            "📊 本轮统计：expired标记=%s 等待=%s 收集中=%s 待验证=%s "
+            "自动回收红包=%s (合计退款=%.6f) 用时%.2fs",
+            counters['timeout_marked'], counters['waiting_total'], counters['collecting_total'],
+            counters['verifying_total'], counters['rp_auto_refunded'], counters['rp_auto_refunded_sum'], dur
+        )
     finally:
         await close_pool()
 

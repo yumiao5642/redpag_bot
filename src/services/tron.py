@@ -12,6 +12,8 @@ from ..config import (
 )
 from ..logger import collect_logger
 from tronpy.exceptions import TransactionNotFound
+from datetime import datetime
+
 
 # 允许配置多个 Key，轮询
 def _parse_keys(raw: str) -> Optional[Union[str, List[str]]]:
@@ -79,6 +81,63 @@ async def _retry_with_backoff(coro_func, *args, **kwargs):
                 continue
             raise
 
+async def get_account_meta(address: str) -> Dict:
+    """
+    通过 TronGrid v1 查询账户元信息。
+    返回：
+      {
+        "created_at": "YYYY-MM-DD HH:MM:SS" | None,
+        "last_active": "YYYY-MM-DD HH:MM:SS" | None,
+        "is_contract": bool,
+        "type_text": "普通账户" | "合约账户" | "未知",
+        "frozen_trx": float   # 质押(冻结)TRX总额
+      }
+    """
+    def _fetch():
+        headers = {}
+        if TRONGRID_API_KEY:
+            k = TRONGRID_API_KEY.split(",")[0].strip()
+            if k:
+                headers["TRON-PRO-API-KEY"] = k
+        url = f"https://api.trongrid.io/v1/accounts/{address}"
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
+        js = r.json() or {}
+        data = (js.get("data") or [{}])[0] if isinstance(js.get("data"), list) and js["data"] else (js.get("data") or {})
+        # 时间：毫秒 → 本地时间字符串
+        def ts(ms):
+            if not ms:
+                return None
+            try:
+                return datetime.fromtimestamp(int(ms)/1000).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return None
+        created = ts(data.get("create_time") or data.get("createTime"))
+        lastact = ts(data.get("latest_opration_time") or data.get("latestOprationTime") or data.get("latest_operation_time"))
+        # 类型
+        typ = str(data.get("type") or "").lower()
+        is_contract = (typ == "contract")
+        type_text = "合约账户" if is_contract else ("普通账户" if typ else "未知")
+        # 冻结(质押)TRX
+        frozen_v2 = data.get("frozenV2") or []
+        if isinstance(frozen_v2, dict):
+            frozen_v2 = [frozen_v2]
+        summed = 0
+        for it in frozen_v2:
+            try:
+                summed += int(it.get("amount", 0))
+            except Exception:
+                pass
+        return {
+            "created_at": created,
+            "last_active": lastact,
+            "is_contract": is_contract,
+            "type_text": type_text,
+            "frozen_trx": float(summed) / 1_000_000.0
+        }
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch)
+
 # ========== 账户/资源 ==========
 def get_trx_balance(address: str) -> float:
     c = _get_client()
@@ -88,16 +147,42 @@ def get_trx_balance(address: str) -> float:
 
 def get_account_resource(address: str) -> dict:
     """
-    返回 {'bandwidth': int, 'energy': int}
-    带宽 = (freeNetLimit - freeNetUsed) + (NetLimit - NetUsed)
-    能量 = (EnergyLimit - EnergyUsed)
+    返回：
+      {
+        'bandwidth': int,               # (free 可用 + 质押可用) 的总可用带宽
+        'energy': int,                  # 可用能量
+        # 下面是新增的细分字段，便于 UI 显示：
+        'energy_limit': int,
+        'energy_used': int,
+        'bandwidth_free_total': int,
+        'bandwidth_free_used': int,
+        'bandwidth_stake_total': int,
+        'bandwidth_stake_used': int,
+      }
     """
     c = _get_client()
     info = c.get_account_resource(address)
-    bw = max(0, int(info.get('freeNetLimit', 0)) - int(info.get('freeNetUsed', 0))) \
-         + max(0, int(info.get('NetLimit', 0)) - int(info.get('NetUsed', 0)))
-    en = max(0, int(info.get('EnergyLimit', 0)) - int(info.get('EnergyUsed', 0)))
-    return {'bandwidth': bw, 'energy': en}
+
+    free_total  = int(info.get('freeNetLimit', 0))
+    free_used   = int(info.get('freeNetUsed', 0))
+    stake_total = int(info.get('NetLimit', 0))
+    stake_used  = int(info.get('NetUsed', 0))
+    en_limit    = int(info.get('EnergyLimit', 0))
+    en_used     = int(info.get('EnergyUsed', 0))
+
+    bw_free_avail  = max(0, free_total  - free_used)
+    bw_stake_avail = max(0, stake_total - stake_used)
+
+    return {
+        'bandwidth': bw_free_avail + bw_stake_avail,
+        'energy':    max(0, en_limit - en_used),
+        'energy_limit': en_limit,
+        'energy_used':  en_used,
+        'bandwidth_free_total':  free_total,
+        'bandwidth_free_used':   free_used,
+        'bandwidth_stake_total': stake_total,
+        'bandwidth_stake_used':  stake_used,
+    }
 
 # ========== TRX 转账 ==========
 def wait_tx_committed(txid: str, timeout: int = 45, interval: float = 1.5) -> dict:

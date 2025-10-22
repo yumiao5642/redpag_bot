@@ -2,17 +2,14 @@
 import io
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
-
 def make_qr_png_bytes(data, scale=0.5, caption=None):
     qr = qrcode.QRCode(border=2, box_size=10)
     qr.add_data(data); qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-
     # 缩放
     if isinstance(scale, float) and 0 < scale < 1.0:
         w, h = img.size
         img = img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
-
     # 叠加地址文字（自动换行）
     if caption:
         pad = 16
@@ -38,7 +35,6 @@ def make_qr_png_bytes(data, scale=0.5, caption=None):
             draw.text((10, y), ln, fill="black", font=font)
             y += line_h
         img = canvas
-
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()

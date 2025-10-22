@@ -50,7 +50,7 @@ DROP TABLE IF EXISTS `ledger`;
 CREATE TABLE `ledger` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) NOT NULL,
-  `change_type` enum('recharge','withdraw','redpacket_send','redpacket_claim','adjust') NOT NULL,
+  `change_type` enum('recharge','withdraw','redpacket_send','redpacket_claim','redpacket_refund','adjust') NOT NULL,
   `ref_table` varchar(32) DEFAULT NULL,
   `amount` decimal(18,6) NOT NULL,
   `balance_before` decimal(18,6) NOT NULL,
@@ -63,7 +63,7 @@ CREATE TABLE `ledger` (
   KEY `fk_ledger_user` (`user_id`),
   KEY `idx_ledger_ref` (`change_type`,`ref_table`,`ref_id`),
   CONSTRAINT `fk_ledger_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB AUTO_INCREMENT=22 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -90,7 +90,7 @@ CREATE TABLE `recharge_orders` (
   KEY `fk_recharge_user` (`user_id`),
   KEY `idx_recharge_waiting` (`status`,`expire_at`),
   CONSTRAINT `fk_recharge_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=14 DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB AUTO_INCREMENT=16 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -129,7 +129,7 @@ CREATE TABLE `red_packet_shares` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_packet_seq` (`red_packet_id`,`seq`),
   CONSTRAINT `fk_share_packet` FOREIGN KEY (`red_packet_id`) REFERENCES `red_packets` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -157,7 +157,7 @@ CREATE TABLE `red_packets` (
   PRIMARY KEY (`id`),
   KEY `fk_redpacket_user` (`owner_id`),
   CONSTRAINT `fk_redpacket_user` FOREIGN KEY (`owner_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -193,7 +193,7 @@ CREATE TABLE `user_addresses` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_user_addr` (`user_id`,`address`),
   CONSTRAINT `fk_addr_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -244,4 +244,4 @@ CREATE TABLE `users` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2025-10-21 23:25:55
+-- Dump completed on 2025-10-22 21:54:54

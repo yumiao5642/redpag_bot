@@ -117,7 +117,6 @@ async def show_recharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order = _decorate_order_for_view(order)
 
     addr = order["address"]
-    # 生成二维码（图片内叠加地址）
     png = make_qr_png_bytes(addr, scale=0.5, caption=addr)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 刷新状态", callback_data=f"recharge_refresh:{order['id']}")]])
 
@@ -127,6 +126,9 @@ async def show_recharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb
     )
+
+    from ..logger import recharge_logger
+    recharge_logger.info("➕ 打开充值页：用户=%s，订单ID=%s，地址=%s，剩余=%s分钟", u.id, order["id"], addr, order["left_min"])
 
 # --- src/handlers/recharge.py 中替换 recharge_callback ---
 async def recharge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
