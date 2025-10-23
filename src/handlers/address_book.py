@@ -14,7 +14,7 @@ def _list_text(rows):
         return "当前无常用地址。"
     lines = ["常用地址列表："]
     for r in rows:
-        lines.append(f"- {r['address']}  {r['alias']}")  # 调整顺序：地址 名称
+        lines.append(f"- {r['address']}  {r['alias']}")
     return "\n".join(lines)
 
 def _kb():

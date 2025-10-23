@@ -46,3 +46,24 @@ def redpacket_create_menu(rp_id: int, rp_type: str):
         InlineKeyboardButton("确认支付", callback_data=f"rp_pay:{rp_id}")
     ]
     return InlineKeyboardMarkup([_type_row(rp_id, rp_type), row1, row2])
+
+def redpacket_draft_menu(rp_type: str):
+    def _type_btn(t, label):
+        hand = "👉 " if t == rp_type else ""
+        return InlineKeyboardButton(f"{hand}{label}", callback_data=f"rpd_type:{t}")
+
+    if rp_type in ("random", "average"):
+        row1 = [
+            InlineKeyboardButton("设置红包数量", callback_data="rpd_set_count"),
+            InlineKeyboardButton("设置红包金额", callback_data="rpd_set_amount"),
+        ]
+    else:
+        row1 = [
+            InlineKeyboardButton("设置专属对象", callback_data="rpd_set_exclusive"),
+            InlineKeyboardButton("设置红包金额", callback_data="rpd_set_amount"),
+        ]
+    row2 = [
+        InlineKeyboardButton("设置封面", callback_data="rpd_set_cover"),
+        InlineKeyboardButton("确认支付", callback_data="rpd_pay"),
+    ]
+    return InlineKeyboardMarkup([[ _type_btn("random","随机"), _type_btn("average","平均"), _type_btn("exclusive","专属") ], row1, row2])

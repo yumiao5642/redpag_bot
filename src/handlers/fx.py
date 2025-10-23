@@ -27,11 +27,8 @@ def _safe(s: str) -> str:
 
 async def show_fx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     params = {
-        "quoteCurrency": "CNY",
-        "baseCurrency": "USDT",
-        "paymentMethod": "all",
-        "side": "sell",
-        "userType": "all",
+        "quoteCurrency": "CNY", "baseCurrency": "USDT",
+        "paymentMethod": "all", "side": "sell", "userType": "all",
     }
     u = update.effective_user
     try:
@@ -45,18 +42,11 @@ async def show_fx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     data = (js.get("data") or {})
     sell = (data.get("sell") or [])[:10]
-
     header = "汇率实时查询\n数据来源：欧易 - 出售\n"
     lines = ["前十笔订单价格："]
     for it in sell:
         price = str(it.get("price") or "-")
         nick = _safe(it.get("nickName") or it.get("nick_name") or "-")
         lines.append(f"{price:<8} {nick}")
-
     body = "```" + ("\n".join(lines) if lines else "前十笔订单价格：\n暂无数据") + "```"
     await update.message.reply_text(header + body, parse_mode=ParseMode.MARKDOWN)
-
-    if sell:
-        app_logger.info("📈 汇率查询：用户 %s，取到 %d 条，首价=%s", log_user(u), len(sell), str(sell[0].get("price")))
-    else:
-        app_logger.info("📈 汇率查询：用户 %s，暂无数据", log_user(u))

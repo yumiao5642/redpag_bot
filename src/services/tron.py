@@ -289,9 +289,8 @@ def is_valid_address(address: str) -> bool:
 # ========== TronGrid 最近转账 ==========
 def probe_account_type(address: str) -> Dict:
     """
-    通过 TronScan 公开接口探测账户标签：
-    - 返回 {name, tags, is_exchange, is_official}
-    - 失败时返回全 False
+    TronScan 公开接口标签探测。
+    返回 {name, tags, is_exchange, is_official}
     """
     name, tags = "", []
     try:
@@ -309,7 +308,7 @@ def probe_account_type(address: str) -> Dict:
     label = (name or "").lower()
     tags_l = [str(t).lower() for t in (tags or [])]
 
-    exch_kw = ("exchange", "binance", "okx", "okex", "huobi", "gate", "kucoin", "bybit", "mexc", "poloniex", "upbit", "bitfinex", "bitget")
+    exch_kw = ("exchange", "binance", "okx", "okex", "huobi", "gate", "kucoin", "bybit", "mexc", "bitget", "poloniex", "upbit", "bitfinex")
     offi_kw = ("official", "verified", "tether", "tron", "justlend", "sun.io", "justswap", "usdt", "btt", "tron foundation")
 
     is_exchange = any(k in tags_l for k in ("exchange",)) or any(k in label for k in exch_kw)

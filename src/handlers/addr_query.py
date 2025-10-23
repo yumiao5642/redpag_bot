@@ -6,8 +6,7 @@ from telegram.constants import ParseMode
 from .common import fmt_amount, show_main_menu
 from ..services.tron import (
     is_valid_address, get_trx_balance, get_usdt_balance,
-    get_account_resource, get_recent_transfers, get_account_meta,
-    probe_account_type  # ← 新增
+    get_account_resource, get_recent_transfers, get_account_meta, probe_account_type
 )
 from ..services.risk import check_address_risk  # ← 保持
 
@@ -55,15 +54,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(update.effective_chat.id, context)
         return
 
-    # 基础信息
     trx = get_trx_balance(addr)
     usdt = await get_usdt_balance(addr)
     res  = get_account_resource(addr)
     meta = await get_account_meta(addr)
+    label_info = probe_account_type(addr)
 
-    # 账户类型判定（TronScan 标签 + 合约属性）
-    loop = asyncio.get_running_loop()
-    label_info = await loop.run_in_executor(None, lambda: probe_account_type(addr))
     if label_info.get("is_exchange"):
         type_text = f"交易所账户：{label_info.get('name') or '-'}"
     elif label_info.get("is_official"):
@@ -73,19 +69,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         type_text = "普通账户"
 
-    # 风险（失败不阻断）
     risk_level, triggers, _ = await check_address_risk(addr)
     cn_map = {
-        "phishing_activities": "网络钓鱼",
-        "sanctioned": "被制裁",
-        "darkweb_transactions": "暗网交易",
-        "money_laundering": "洗钱",
-        "cybercrime": "网络犯罪",
-        "blacklist_doubt": "可疑黑名单",
-        "mixer": "混币",
-        "honeypot_related_address": "蜜罐关联",
-        "financial_crime": "金融犯罪",
-        "fake_token_deployer": "伪代币部署",
+        "phishing_activities": "网络钓鱼", "sanctioned": "被制裁", "darkweb_transactions": "暗网交易",
+        "money_laundering": "洗钱", "cybercrime": "网络犯罪", "blacklist_doubt": "可疑黑名单",
+        "mixer": "混币", "honeypot_related_address": "蜜罐关联", "financial_crime": "金融犯罪", "fake_token_deployer": "伪代币部署",
     }
     reasons = [cn_map.get(t, t) for t in (triggers or [])]
     if risk_level == "低":
@@ -96,7 +84,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         risk_line = "风险评估：未知"
 
-    # 顶部块
     top_lines = [
         f"🧭 地址查询： {addr}",
         f"⏰ 创建时间：{meta.get('created_at') or '-'}",
@@ -113,7 +100,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📡 免费带宽：{_fnum(max(0, res.get('bandwidth_free_total', 0) - res.get('bandwidth_free_used', 0)), 0)} / {_fnum(res.get('bandwidth_free_total', 0), 0)}",
         "",
         "最近转账（最多 10 条）：",
-        ""  # 与红包页一致：标题与 code 之间空行，避免“顶到标题行”
+        ""
     ]
 
     transfers = await get_recent_transfers(addr, limit=10)

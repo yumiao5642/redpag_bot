@@ -12,7 +12,6 @@ from ..services.encryption import encrypt_text
 from ..logger import user_click_logger, app_logger
 from ..keyboards import MAIN_MENU
 
-
 def fmt_amount(x) -> str:
     try:
         return f"{float(x):.2f}"
