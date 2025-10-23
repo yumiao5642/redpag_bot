@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
+from .utils.order_no import gen_order_no
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import random, string
-
-from .db import fetchone, fetchall, execute, execute_rowcount  # 导出 execute_rowcount 统计受影响行数
+from .db import fetchone, fetchall, execute, execute_rowcount, get_conn  # 新增 get_conn
+from decimal import Decimal  # 新增
+import aiomysql  # 新增
 
 
 # ===== sys_flags =====
@@ -154,14 +156,24 @@ async def deduct_balance_and_unfreeze(user_id: int, total: float):
         (total, total, user_id)
     )
 # ===== 账变 =====
-
-async def add_ledger(user_id: int, change_type: str, amount: float, bal_before: float, bal_after: float,
-                     ref_table: str, ref_id: int, remark: str):
-    await execute(
-        "INSERT INTO ledger(user_id, change_type, amount, balance_before, balance_after, ref_table, ref_id, remark, created_at) "
-        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NOW())",
-        (user_id, change_type, amount, bal_before, bal_after, ref_table, ref_id, remark)
-    )
+async def add_ledger(user_id: int, type_: str, amount: float, before: float, after: float,
+                     ref_table: str, ref_id: int, remark: str, order_no: str):
+    """
+    新签名：带 order_no，并依赖 (user_id, order_no) 唯一索引防重。
+    表字段名对齐：change_type（不是 type）。
+    """
+    sql = ("INSERT INTO ledger(user_id, change_type, amount, balance_before, balance_after, "
+           "ref_table, ref_id, order_no, remark, created_at) "
+           "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())")
+    try:
+        await execute(sql, (user_id, type_, amount, before, after,
+                            ref_table, ref_id, order_no, remark))
+    except Exception as e:
+        s = str(e).lower()
+        if "duplicate" in s or "unique" in s:
+            # 已记账：静默跳过，保证幂等
+            return
+        raise
 
 async def list_ledger_recent(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     return await fetchall(
@@ -237,13 +249,17 @@ async def list_red_packets(user_id: int, limit: int = 10) -> List[Dict[str, Any]
         (user_id, limit)
     )
 
-async def create_red_packet(user_id: int, rp_type: str, total_amount: float, count: int,
-                            currency: Optional[str], cover_text: Optional[str], exclusive_user_id: Optional[int]) -> int:
-    currency = currency or "USDT-trc20"
-    sql = ("INSERT INTO red_packets(owner_id, type, total_amount, count, currency, cover_text, exclusive_user_id, status, created_at, expires_at) "
-           "VALUES(%s,%s,%s,%s,%s,%s,%s,'created',NOW(), DATE_ADD(NOW(), INTERVAL 24 HOUR))")
-    new_id = await execute(sql, (user_id, rp_type, total_amount, count, currency, cover_text, exclusive_user_id))
-    return new_id
+async def create_red_packet(owner_id: int, type_: str, total_amount: float, count: int,
+                            exclusive_user_id: Optional[int], cover_text: Optional[str],
+                            expires_at):
+    from .utils.order_no import gen_order_no
+    rp_no = gen_order_no("red")  # red_YYMMDDxxxx
+    sql = ("INSERT INTO red_packets(rp_no, owner_id, type, total_amount, count, exclusive_user_id, "
+           "cover_text, status, expires_at, created_at) "
+           "VALUES(%s,%s,%s,%s,%s,%s,%s,'created',%s,NOW())")
+    rp_id = await execute(sql, (rp_no, owner_id, type_, total_amount, count,
+                                exclusive_user_id, cover_text, expires_at))
+    return rp_id
 
 async def get_red_packet(rp_id: int) -> Optional[Dict[str, Any]]:
     return await fetchone("SELECT * FROM red_packets WHERE id=%s", (rp_id,))
@@ -357,7 +373,7 @@ async def list_user_active_red_packets(user_id: int):
     return await fetchall(
         "SELECT * FROM red_packets "
         "WHERE owner_id=%s "
-        "  AND status IN ('created','paid','sent') "
+        "  AND status IN ('paid','sent') "
         "  AND (expires_at IS NULL OR expires_at>NOW())",
         (user_id,)
     )
@@ -379,3 +395,83 @@ async def list_expired_red_packets(limit: int = 200) -> List[Dict[str, Any]]:
         "ORDER BY id ASC LIMIT %s",
         (limit,)
     )
+
+async def claim_share_atomic(rp_id: int, user_id: int):
+    """
+    原子抢红包（严格顺序）：
+      1) 锁定一条未领取的份额 (FOR UPDATE)
+      2) 标记份额为已领取（先扣库存）
+      3) 锁定用户钱包，入账金额
+      4) 写账变（含唯一 order_no：red_claim_<rp_no>_<share_id>）
+    全过程同一事务内；任一步失败将回滚。
+    返回 (share_id, amount) 或 None（已抢完）
+    """
+    async with (await get_conn()) as conn:
+        try:
+            await conn.begin()
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                # 1) 找到一条可领取份额并加锁
+                await cur.execute(
+                    "SELECT id, amount FROM red_packet_shares "
+                    "WHERE red_packet_id=%s AND claimed_by IS NULL "
+                    "ORDER BY id ASC LIMIT 1 FOR UPDATE",
+                    (rp_id,)
+                )
+                row = await cur.fetchone()
+                if not row:
+                    await conn.rollback()
+                    return None
+
+                share_id = int(row["id"])
+                amt = Decimal(str(row["amount"]))
+
+                # 2) 尝试标记为已领取（若被别人抢到了，这里会失败）
+                await cur.execute(
+                    "UPDATE red_packet_shares SET claimed_by=%s, claimed_at=NOW() "
+                    "WHERE id=%s AND claimed_by IS NULL",
+                    (user_id, share_id)
+                )
+                if cur.rowcount == 0:
+                    await conn.rollback()
+                    return None
+
+                # 3) 入账：先锁定钱包行
+                await cur.execute(
+                    "SELECT usdt_trc20_balance FROM user_wallets WHERE user_id=%s FOR UPDATE",
+                    (user_id,)
+                )
+                w = await cur.fetchone() or {}
+                before = Decimal(str(w.get("usdt_trc20_balance", 0)))
+                after = before + amt
+                await cur.execute(
+                    "UPDATE user_wallets SET usdt_trc20_balance=%s WHERE user_id=%s",
+                    (float(after), user_id)
+                )
+
+                # 4) 写账变（幂等靠唯一键）
+                await cur.execute("SELECT rp_no FROM red_packets WHERE id=%s", (rp_id,))
+                rp = await cur.fetchone() or {}
+                rp_no = rp.get("rp_no", str(rp_id))
+                order_no = f"red_claim_{rp_no}_{share_id}"
+                await cur.execute(
+                    "INSERT INTO ledger(user_id, change_type, amount, balance_before, balance_after, "
+                    "ref_table, ref_id, order_no, remark, created_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())",
+                    (user_id, "redpacket_claim", float(amt), float(before), float(after),
+                     "red_packets", rp_id, order_no, "领取红包入账")
+                )
+
+            await conn.commit()
+            return share_id, float(amt)
+        except Exception:
+            await conn.rollback()
+            raise
+
+async def list_red_packet_claims(rp_id: int):
+    sql = ("SELECT s.seq AS seq, s.claimed_at, s.amount, s.claimed_by, "
+           "u.display_name, u.first_name, u.last_name, u.username "
+           "FROM red_packet_shares s "
+           "LEFT JOIN users u ON u.id = s.claimed_by "
+           "WHERE s.red_packet_id=%s AND s.claimed_by IS NOT NULL "
+           "ORDER BY s.id ASC")
+    return await fetchall(sql, (rp_id,))

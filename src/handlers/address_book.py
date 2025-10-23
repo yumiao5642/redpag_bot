@@ -5,6 +5,7 @@ from ..models import add_user_address, list_user_addresses
 from ..services.tron import is_valid_address
 from ..logger import address_logger
 from .common import show_main_menu
+from ..utils.logfmt import log_user  # 顶部新增
 
 ALIA_MAX = 15
 
@@ -13,7 +14,7 @@ def _list_text(rows):
         return "当前无常用地址。"
     lines = ["常用地址列表："]
     for r in rows:
-        lines.append(f"- {r['alias']}  {r['address']}")
+        lines.append(f"- {r['address']}  {r['alias']}")  # 调整顺序：地址 名称
     return "\n".join(lines)
 
 def _kb():
@@ -83,7 +84,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("TRX 地址格式不正确，请检查后重试。"); return
 
     await add_user_address(update.effective_user.id, addr, alias)
-    address_logger.info(f"📮 用户 {update.effective_user.id} 绑定地址：{addr}（{alias}）")
+    address_logger.info(f"📮 用户 {log_user(update.effective_user)} 绑定地址：{addr}（{alias}）")
     context.user_data.pop("addrbook_waiting", None)
     rows = await list_user_addresses(update.effective_user.id)
     await update.message.reply_text("地址绑定成功！\n\n" + _list_text(rows), reply_markup=_kb())

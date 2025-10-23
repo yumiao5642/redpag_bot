@@ -6,7 +6,8 @@ from telegram.constants import ParseMode
 from .common import fmt_amount, show_main_menu
 from ..services.tron import (
     is_valid_address, get_trx_balance, get_usdt_balance,
-    get_account_resource, get_recent_transfers, get_account_meta  # ← 新增导入
+    get_account_resource, get_recent_transfers, get_account_meta,
+    probe_account_type  # ← 新增
 )
 from ..services.risk import check_address_risk  # ← 保持
 
@@ -49,7 +50,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.pop("addr_query_waiting", False):
         return
     addr = (update.message.text or "").strip()
-
     if not is_valid_address(addr):
         await update.message.reply_text("当前仅支持TRC-20格式地址,请重新输入", reply_markup=cancel_kb("addr_query"))
         await show_main_menu(update.effective_chat.id, context)
@@ -60,6 +60,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usdt = await get_usdt_balance(addr)
     res  = get_account_resource(addr)
     meta = await get_account_meta(addr)
+
+    # 账户类型判定（TronScan 标签 + 合约属性）
+    loop = asyncio.get_running_loop()
+    label_info = await loop.run_in_executor(None, lambda: probe_account_type(addr))
+    if label_info.get("is_exchange"):
+        type_text = f"交易所账户：{label_info.get('name') or '-'}"
+    elif label_info.get("is_official"):
+        type_text = f"官方/项目方账户：{label_info.get('name') or '-'}"
+    elif meta.get("is_contract"):
+        type_text = "合约账户"
+    else:
+        type_text = "普通账户"
 
     # 风险（失败不阻断）
     risk_level, triggers, _ = await check_address_risk(addr)
@@ -89,7 +101,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🧭 地址查询： {addr}",
         f"⏰ 创建时间：{meta.get('created_at') or '-'}",
         f"🌟 最后活跃：{meta.get('last_active') or '-'}",
-        f"👤 账户类型：{meta.get('type_text') or '未知'}",
+        f"👤 账户类型：{type_text}",
         f"🚨 {risk_line}",
         "",
         "账户概览：",
@@ -101,9 +113,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📡 免费带宽：{_fnum(max(0, res.get('bandwidth_free_total', 0) - res.get('bandwidth_free_used', 0)), 0)} / {_fnum(res.get('bandwidth_free_total', 0), 0)}",
         "",
         "最近转账（最多 10 条）：",
+        ""  # 与红包页一致：标题与 code 之间空行，避免“顶到标题行”
     ]
 
-    # 最近 10 笔 TRC20 转账（仍用 code 格式表格）
     transfers = await get_recent_transfers(addr, limit=10)
     if transfers:
         header = _fmt_row("时间", "类", "币", "金额", "对方地址")

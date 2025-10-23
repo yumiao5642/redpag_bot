@@ -17,8 +17,7 @@ import random
 from ..models import make_order_no
 
 def _wdpwd_kbd():
-    today = date.today().isoformat()
-    rnd = random.Random(today)
+    rnd = random.SystemRandom()
     digits = [str(i) for i in range(10)]
     rnd.shuffle(digits)
     grid = [digits[:3], digits[3:6], digits[6:9]]
@@ -174,24 +173,20 @@ async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     avail = float(Decimal(str(bal)) - Decimal(str(frz)))
     base = (f"账户ID：{u.id}\n\nUSDT-trc20 -- 当前余额: {fmt_amount(bal)} U（可用 {fmt_amount(avail)} U）\n"
             f"提示: 最小提款金额: {fmt_amount(MIN_WITHDRAW_USDT)} U\n手续费: 0% + {fmt_amount(WITHDRAW_FEE_FIXED)} U\n")
-
     addrs = await list_user_addresses(u.id)
-
     if avail < MIN_WITHDRAW_USDT + WITHDRAW_FEE_FIXED:
         await update.message.reply_text(base + "\n可用余额不足提现最低要求!", reply_markup=_addr_kb(addrs))
-        withdraw_logger.info("💸 打开提现页：用户=%s，可用不足（可用=%.6f）", u.id, avail)
+        withdraw_logger.info("💸 打开提现页：用户=%s，可用不足（可用=%.6f）", log_user(u), avail)
         return
-
     if not addrs:
         await update.message.reply_text(base + "\n当前无常用地址。", reply_markup=_addr_kb(addrs))
-        withdraw_logger.info("💸 打开提现页：用户=%s，暂无常用地址", u.id)
+        withdraw_logger.info("💸 打开提现页：用户=%s，暂无常用地址", log_user(u))
         return
-
     lines = [base, "\n已添加常用地址："]
     for a in addrs:
-        lines.append(f"- {a['alias']}  {a['address']}")
+        lines.append(f"- {a['address']}  {a['alias']}")  # 调整顺序
     await update.message.reply_text("\n".join(lines), reply_markup=_addr_kb(addrs))
-    withdraw_logger.info("💸 打开提现页：用户=%s，地址数=%s，可用=%.6f", u.id, len(addrs), avail)
+    withdraw_logger.info("💸 打开提现页：用户=%s，地址数=%s，可用=%.6f", log_user(u), len(addrs), avail)
 
 async def withdraw_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from .common import cancel_kb

@@ -28,8 +28,8 @@ _PWD_KBD = InlineKeyboardMarkup([
 ])
 
 def _kbd():
-    today = date.today().isoformat()
-    rnd = random.Random(today)
+    # 每次渲染都随机，满足“输入一位即打乱”
+    rnd = random.SystemRandom()
     digits = [str(i) for i in range(10)]
     rnd.shuffle(digits)
     grid = [digits[:3], digits[3:6], digits[6:9]]

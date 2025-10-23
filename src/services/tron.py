@@ -287,6 +287,36 @@ def is_valid_address(address: str) -> bool:
     return True
 
 # ========== TronGrid 最近转账 ==========
+def probe_account_type(address: str) -> Dict:
+    """
+    通过 TronScan 公开接口探测账户标签：
+    - 返回 {name, tags, is_exchange, is_official}
+    - 失败时返回全 False
+    """
+    name, tags = "", []
+    try:
+        url = "https://apilist.tronscanapi.com/api/account"
+        r = requests.get(url, params={"address": address}, timeout=15)
+        r.raise_for_status()
+        js = r.json() or {}
+        name = (js.get("name") or js.get("accountName") or "").strip()
+        tags = js.get("tags") or js.get("tag") or []
+        if isinstance(tags, str):
+            tags = [tags]
+    except Exception:
+        pass
+
+    label = (name or "").lower()
+    tags_l = [str(t).lower() for t in (tags or [])]
+
+    exch_kw = ("exchange", "binance", "okx", "okex", "huobi", "gate", "kucoin", "bybit", "mexc", "poloniex", "upbit", "bitfinex", "bitget")
+    offi_kw = ("official", "verified", "tether", "tron", "justlend", "sun.io", "justswap", "usdt", "btt", "tron foundation")
+
+    is_exchange = any(k in tags_l for k in ("exchange",)) or any(k in label for k in exch_kw)
+    is_official = any(k in tags_l for k in ("official","verified")) or any(k in label for k in offi_kw)
+
+    return {"name": name, "tags": tags, "is_exchange": bool(is_exchange), "is_official": bool(is_official)}
+
 async def get_recent_transfers(address: str, limit: int = 10) -> List[Dict]:
     """
     读取地址最近 TRC20 转账（基于 TronGrid v1）。

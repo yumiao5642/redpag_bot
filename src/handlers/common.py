@@ -10,6 +10,8 @@ from ..models import ensure_user, get_wallet, set_tron_wallet
 from ..services.tron import generate_address
 from ..services.encryption import encrypt_text
 from ..logger import user_click_logger, app_logger
+from ..keyboards import MAIN_MENU
+
 
 def fmt_amount(x) -> str:
     try:
@@ -25,8 +27,6 @@ async def ensure_user_and_wallet(update: Update, context: ContextTypes.DEFAULT_T
         addr = generate_address()
         await set_tron_wallet(u.id, addr.address, encrypt_text(addr.private_key_hex))
         app_logger.info(f"🔐 为用户 {u.id} 生成 TRON 地址: {addr.address}")
-
-    # 日志：ID（昵称｜@用户名）
     disp = ((u.first_name or "") + (u.last_name or "")).strip()
     user_click_logger.info(
         f"👆 用户 {u.id}（{disp or '-'}｜@{u.username or '-'}） 触发交互：{update.effective_message.text if update.effective_message else 'callback'}"
@@ -45,26 +45,19 @@ MAIN_KB = ReplyKeyboardMarkup(
 async def show_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, text: Optional[str]=None):
     if not text:
         text = "👇 请选择功能："
-    await context.bot.send_message(chat_id, text, reply_markup=MAIN_KB)
-
+    await context.bot.send_message(chat_id, text, reply_markup=MAIN_MENU)
 
 def cancel_kb(tag: str = "input"):
-    """
-    通用“取消”按钮（行内键盘）
-    tag 仅用于排查来源，不影响行为
-    """
     return InlineKeyboardMarkup([[InlineKeyboardButton("取消", callback_data=f"cancel:{tag}")]])
 
 def clear_user_flow_flags(context: ContextTypes.DEFAULT_TYPE):
-    """
-    清理所有可能存在的“等待输入”状态位
-    """
     keys = [
         "addrbook_waiting", "addrbook_del_waiting",
         "withdraw_add_waiting", "wd_wait_amount", "wd_target",
         "rp_query_waiting", "await_field",
         "addr_query_waiting",
         "rppwd_flow", "pwd_flow",
+        "wd_pwd_flow",
     ]
     for k in keys:
         context.user_data.pop(k, None)

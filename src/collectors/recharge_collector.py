@@ -22,22 +22,14 @@ from ..services.tron import (
 
 
 async def _auto_refund_expired_red_packets(counters: dict):
-    """
-    查找超过 24 小时（expires_at 已到）仍非 finished 的红包：
-    - 计算未领取余额 = total - 已领取之和
-    - 退回创建人余额、记账 ledger(redpacket_refund)
-    - 状态置为 finished
-    """
     from decimal import Decimal
     from ..models import (
         list_expired_red_packets, sum_claimed_amount, get_wallet,
         update_wallet_balance, add_ledger, set_red_packet_status
     )
-
     recs = await list_expired_red_packets(limit=200)
     n = 0
     total_refund = Decimal("0")
-
     for r in recs:
         rp_id = r["id"]; owner = r["owner_id"]
         total = Decimal(str(r["total_amount"]))
@@ -48,17 +40,18 @@ async def _auto_refund_expired_red_packets(counters: dict):
             before = Decimal(str((wallet or {}).get("usdt_trc20_balance", 0)))
             after = before + remain
             await update_wallet_balance(owner, float(after))
+            # 唯一订单号：red_refund_<rp_no>
+            rp_no = r.get("rp_no") or f"rp{rp_id}"
+            order_no = f"red_refund_{rp_no}"
             await add_ledger(owner, "redpacket_refund", float(remain), float(before), float(after),
-                             "red_packets", rp_id, "红包超过24小时未领取自动退款")
+                             "red_packets", rp_id, "红包超过24小时未领取自动退款", order_no)
             total_refund += remain
-
         await set_red_packet_status(rp_id, "finished")
         n += 1
         redpacket_logger.info(
-            "🧧[自动回收] 红包ID=%s 创建人=%s 类型=%s 总额=%.6f 已领=%.6f 退款=%.6f -> 设为 finished",
+            "🧧[自动回收] 红包ID=%s 创建人=%s  类型=%s  总额=%.6f  已领=%.6f  退款=%.6f → 设为 finished",
             rp_id, owner, r.get("type"), float(total), float(claimed), float(max(remain, Decimal('0')))
         )
-
     counters["rp_auto_refunded"] = n
     counters["rp_auto_refunded_sum"] = float(total_refund)
 
@@ -173,20 +166,16 @@ async def _collect_and_book(uid: int, addr: str, oid: int, order_no: str):
     if not ok:
         collect_logger.info(f"⏸ 订单 {oid}（{order_no}）预检未通过，跳过本轮归集")
         return None
-
     wallet = await get_wallet(uid)
-    from ..services.encryption import decrypt_text
     priv_enc = wallet.get("tron_privkey_enc") if wallet else None
     if not priv_enc:
         collect_logger.error(f"❌ 订单 {oid}（{order_no}）用户 {uid} 无私钥记录，无法归集")
         return None
     priv_hex = decrypt_text(priv_enc)
-
     bal = await get_usdt_balance(addr)
     if bal <= 0:
         collect_logger.warning(f"⚠️ 订单 {oid}（{order_no}）准备归集时余额为 0，跳过")
         return None
-
     try:
         txid = await usdt_transfer_all(priv_hex, addr, AGGREGATE_ADDRESS, float(bal))
     except Exception as e:
@@ -194,13 +183,16 @@ async def _collect_and_book(uid: int, addr: str, oid: int, order_no: str):
         return None
 
     await set_recharge_status(oid, "verifying", txid)
+
     if not await ledger_exists_for_ref("recharge", "recharge_orders", oid):
         from decimal import Decimal
         before = Decimal(str(wallet["usdt_trc20_balance"] or 0))
         after = before + Decimal(str(bal))
         await update_wallet_balance(uid, float(after))
+        # 使用订单自身的 order_no 做唯一键（与 (user_id, order_no) 唯一索引配合）
         await add_ledger(uid, "recharge", float(bal), float(before), float(after),
-                         "recharge_orders", oid, "充值成功")
+                         "recharge_orders", oid, "充值成功", order_no)
+
     return txid, float(bal)
 
 async def step_verifying(uid: int, addr: str, oid: int, order_no: str) -> bool:
