@@ -8,23 +8,6 @@ from ..logger import password_logger
 from telegram.error import BadRequest
 import random
 
-# 键盘布局（尽量贴近截图）：三行 + 底部“取消 / 数字3 / 👁”
-_PWD_KBD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("0", callback_data="pwd:0"),
-     InlineKeyboardButton("5", callback_data="pwd:5"),
-     InlineKeyboardButton("4", callback_data="pwd:4")],
-    [InlineKeyboardButton("2", callback_data="pwd:2"),
-     InlineKeyboardButton("8", callback_data="pwd:8"),
-     InlineKeyboardButton("7", callback_data="pwd:7")],
-    [InlineKeyboardButton("9", callback_data="pwd:9"),
-     InlineKeyboardButton("1", callback_data="pwd:1"),
-     InlineKeyboardButton("6", callback_data="pwd:6")],
-    [InlineKeyboardButton("取消", callback_data="pwd:CANCEL"),
-     InlineKeyboardButton("3", callback_data="pwd:3"),
-     InlineKeyboardButton("👁", callback_data="pwd:TOGGLE")],
-    [InlineKeyboardButton("⌫ 退格", callback_data="pwd:BK")]
-])
-
 
 def _kbd():
     rnd = random.SystemRandom()

@@ -31,15 +31,6 @@ async def ensure_user_and_wallet(update: Update, context: ContextTypes.DEFAULT_T
         f"👆 用户 {u.id}（{disp or '-'}｜@{u.username or '-'}） 触发交互：{update.effective_message.text if update.effective_message else 'callback'}"
     )
 
-MAIN_KB = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton("💰 我的钱包")],
-        [KeyboardButton("🧧 红包"), KeyboardButton("➕ 充值")],
-        [KeyboardButton("💸 提现"), KeyboardButton("🧭 地址查询")],
-        [KeyboardButton("🔐 设置密码/修改密码")]
-    ],
-    resize_keyboard=True
-)
 
 async def show_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, text: Optional[str]=None):
     if not text:

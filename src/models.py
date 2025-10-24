@@ -188,6 +188,15 @@ async def get_ledger_by_ref(change_type: str, ref_table: str, ref_id: int) -> Op
     )
 
 # ===== 地址簿 =====
+async def soft_delete_user_address_by_id(user_id: int, addr_id: int) -> int:
+    """
+    按 id 软删除（仅限当前用户），返回受影响行数
+    """
+    return await execute_rowcount(
+        "UPDATE user_addresses SET status='deleted' WHERE id=%s AND user_id=%s AND status='active'",
+        (addr_id, user_id)
+    )
+
 async def list_user_addresses(user_id: int) -> List[Dict[str, Any]]:
     return await fetchall(
         "SELECT * FROM user_addresses WHERE user_id=%s AND status='active' ORDER BY id DESC",

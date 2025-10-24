@@ -11,6 +11,7 @@ from ..keyboards import redpacket_create_menu, redpacket_draft_menu
 from ..services.redalgo import split_random, split_average
 from ..logger import redpacket_logger
 from ..handlers.common import ensure_user_and_wallet, gc_track, gc_delete
+from .common import safe_reply as _safe_reply
 from ..models import get_flag
 from .common import show_main_menu
 from ..services.encryption import verify_password
@@ -29,22 +30,6 @@ from . import wallet as h_wallet
 from . import password as h_password
 import random
 
-# 全局常量键盘（提升响应）
-_RPPWD_KBD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("0", callback_data="rppwd:0"),
-     InlineKeyboardButton("5", callback_data="rppwd:5"),
-     InlineKeyboardButton("4", callback_data="rppwd:4")],
-    [InlineKeyboardButton("2", callback_data="rppwd:2"),
-     InlineKeyboardButton("8", callback_data="rppwd:8"),
-     InlineKeyboardButton("7", callback_data="rppwd:7")],
-    [InlineKeyboardButton("9", callback_data="rppwd:9"),
-     InlineKeyboardButton("1", callback_data="rppwd:1"),
-     InlineKeyboardButton("6", callback_data="rppwd:6")],
-    [InlineKeyboardButton("取消", callback_data="rppwd:CANCEL"),
-     InlineKeyboardButton("3", callback_data="rppwd:3"),
-     InlineKeyboardButton("👁", callback_data="rppwd:TOGGLE")],
-    [InlineKeyboardButton("⌫ 退格", callback_data="rppwd:BK")]
-])
 
 def _human_dur(start) -> str:
     try:
@@ -161,24 +146,27 @@ async def _guard_redpkt(update, context) -> bool:
         pass
     return False
 
-
-
 async def show_red_packets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_and_wallet(update, context)
     u = update.effective_user
     from ..models import list_red_packets, sum_claimed_amount, count_claimed
     from ..models import get_wallet
+    from ..utils.monofmt import pad as mpad
 
     wallet = await get_wallet(u.id)
     bal = fmt((wallet or {}).get("usdt_trc20_balance", 0.0))
     recs = await list_red_packets(u.id, 10)
 
-    # 标题改为“10 个红包”
-    lines = [f"💼 当前余额：{bal} USDT-TRC20", "🧧 最近创建的 10 个红包："]
-    # 表头：序号｜金额｜个数｜时间｜状态
-    tbl = ["序号｜金额｜个数｜时间｜状态"]
+    header = f"💼 当前余额：{bal} USDT-TRC20"
+    col_idx = 3
+    col_amt = 20   # 金额(已领/总)
+    col_cnt = 12   # 个数(已领/总)
+    col_time = 11  # MM-DD HH:MM
+    col_st = 10
 
     if recs:
+        tbl = ["最近创建的 10 个红包：",
+               f"{mpad('序号', col_idx)}｜{mpad('金额(已领/总额)', col_amt)}｜{mpad('个数(已领/总)', col_cnt)}｜{mpad('时间', col_time)}｜{mpad('状态', col_st)}"]
         for i, r in enumerate(recs, 1):
             tm = "-"
             if r.get("created_at"):
@@ -191,7 +179,6 @@ async def show_red_packets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             got_amt = float(await sum_claimed_amount(r["id"]))
             got_cnt = int(await count_claimed(r["id"]))
 
-            # 状态文案
             st = r.get("status")
             if st in ("paid", "sent"):
                 status_text = "已抢完" if got_cnt >= total_cnt else "使用中"
@@ -206,21 +193,25 @@ async def show_red_packets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 status_text = st or "-"
 
-            # 行：序号｜金额(已领/总额)｜个数(已领/总)｜时间｜状态
-            tbl.append(f"{i}｜{fmt(got_amt)} / {fmt(total_amt)}｜{got_cnt}/{total_cnt}｜{tm}｜{status_text}")
-
-        lines.append("```" + "\n".join(tbl) + "```")
+            tbl.append(
+                f"{mpad(str(i), col_idx)}｜"
+                f"{mpad(f'{fmt(got_amt)} / {fmt(total_amt)}', col_amt)}｜"
+                f"{mpad(f'{got_cnt}/{total_cnt}', col_cnt)}｜"
+                f"{mpad(tm, col_time)}｜"
+                f"{mpad(status_text, col_st)}"
+            )
+        body = "```" + "\n".join(tbl) + "```"
     else:
-        lines.append("```无记录```")
+        body = "```最近创建的 10 个红包：\n无记录```"
 
     # 仅保留两枚按钮
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("回收使用中的红包", callback_data="rp_refund_all")],
         [InlineKeyboardButton("创建红包", callback_data="rp_new")]
     ])
-
-    await update.message.reply_text("\n".join(lines), reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(header + "\n\n" + body, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     redpacket_logger.info("🧧 打开红包页（无序号按钮）：用户=%s，最近记录数=%s", log_user(u), len(recs))
+
 
 async def _render_claim_panel(r: dict, bot_username: str) -> tuple[str, InlineKeyboardMarkup]:
     from ..models import list_red_packet_claims, count_claimed, sum_claimed_amount, get_user
@@ -341,6 +332,19 @@ async def rp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = q.data or ""
     u = update.effective_user
 
+    async def _safe_answer(text: str, alert: bool = True):
+        try:
+            await q.answer(text, show_alert=alert)
+        except Exception:
+            pass
+
+    async def _safe_reply(text: str, **kwargs):
+        try:
+            if q.message:
+                return await q.message.reply_text(text, **kwargs)
+            else:
+                return await context.bot.send_message(chat_id=u.id, text=text, **kwargs)
+        except Exception:
             return None
 
     async def _send_detail(rp_id: int):
@@ -844,12 +848,10 @@ async def rppwd_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await gc_delete(context, q.message.chat_id, "rppwd")
         redpacket_logger.info("🧧 支付取消：用户=%s", log_user(update.effective_user))
         return
-
     if key == "TOGGLE":
         st["vis"] = not st.get("vis", False)
         await _reshow(st.get("buf", ""), st["vis"])
         return
-
     if key == "BK":
         st["buf"] = st.get("buf", "")[:-1]
         await _reshow(st["buf"], st.get("vis", False))
@@ -875,7 +877,8 @@ async def rppwd_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         u = update.effective_user
-        # 草稿：先创建，再扣款
+
+        # 草稿创建 or 直接支付（保持你原有逻辑）……
         if st.get("draft"):
             d = context.user_data.get("rp_draft")
             if not d:
@@ -910,13 +913,14 @@ async def rppwd_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await gc_delete(context, q.message.chat_id, "rppwd")
                 return
 
-        # 资金校验与扣款、生成份额、记账（保持不变）
+        # 资金校验与扣款、拆份、记账（与原逻辑一致）……
         from decimal import Decimal
         wallet = await get_wallet(u.id)
         bal = Decimal(str((wallet or {}).get("usdt_trc20_balance", 0)))
         frozen = Decimal(str((wallet or {}).get("usdt_trc20_frozen", 0) or 0))
         avail = bal - frozen
         total = Decimal(str(r["total_amount"]))
+
         if avail < total:
             context.user_data.pop("rppwd_flow", None)
             try:
@@ -928,7 +932,7 @@ async def rppwd_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await gc_delete(context, q.message.chat_id, "rppwd")
             return
 
-        # 扣款 + 拆份（两位小数的算法）
+        # 扣款 + 拆份 + 记账
         new_bal = bal - total
         await update_wallet_balance(u.id, float(new_bal))
         shares = split_random(float(total), int(r["count"])) if r["type"] == "random" else split_average(float(total), int(r["count"]))
@@ -943,14 +947,12 @@ async def rppwd_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "red_packets", r["id"], "发送红包扣款", order_no
         )
 
-        # 清状态、删除浮层与创建面板
+        # 清理状态
         context.user_data.pop("rppwd_flow", None)
         context.user_data.pop("rp_draft", None)
         context.user_data.pop("rp_create_msg_id", None)
-        await gc_delete(context, q.message.chat_id, "rppwd")
-        await gc_delete(context, q.message.chat_id, "rp_panel")
 
-        # 成功页（两枚按钮）
+        # 构造成功信息
         type_cn = {"random": "随机", "average": "平均", "exclusive": "专属"}.get(r["type"], r["type"])
         exp_text = "-"
         if r.get("expires_at"):
@@ -971,12 +973,30 @@ async def rppwd_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📥 在本聊天插入红包", switch_inline_query_current_chat=f"rp:{rp_no}")],
             [InlineKeyboardButton("📤 转发红包…", switch_inline_query=f"rp:{rp_no}")]
         ])
+
+        # 关键：先展示成功信息，再清理旧 UI；编辑失败则降级为新消息
+        edited = False
         try:
             await q.message.edit_text(detail, reply_markup=kb)
+            edited = True
+            redpacket_logger.info("🧧 支付完成（已编辑原消息）：用户=%s，红包ID=%s，rp_no=%s", log_user(u), r["id"], rp_no)
         except BadRequest as e:
-            if "Message is not modified" not in str(e):
+            msg = str(e).lower()
+            if "message to edit not found" in msg or "message is not modified" in msg:
+                await context.bot.send_message(chat_id=q.message.chat_id, text=detail, reply_markup=kb)
+                redpacket_logger.info("🧧 支付完成（原消息不存在，已降级为新消息发送）：用户=%s，红包ID=%s，rp_no=%s", log_user(u), r["id"], rp_no)
+            else:
+                redpacket_logger.exception("🧧 支付完成后编辑消息异常：%s", e)
                 raise
-        redpacket_logger.info("🧧 支付完成：用户=%s，红包ID=%s，rp_no=%s", log_user(u), r["id"], rp_no)
+
+        # 只在未“编辑成功”时清理密码键盘（避免把成功信息删掉）
+        if not edited:
+            await gc_delete(context, q.message.chat_id, "rppwd")
+        # 始终清理“创建面板”
+        await gc_delete(context, q.message.chat_id, "rp_panel")
+
+        # 成功后返回主菜单
+        await show_main_menu(q.message.chat_id, context)
         return
 
 async def inlinequery_handle(update: Update, context: ContextTypes.DEFAULT_TYPE):

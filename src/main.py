@@ -148,20 +148,19 @@ async def _tap(update: Update, context):
 async def on_error(update, context):
     app_logger.exception("🔥 Handler error: %s | update=%s", context.error, getattr(update, "to_dict", lambda: update)())
 
-
 async def on_text_router(update, context):
     await h_common.autoclean_on_new_action(update, context)
-
     text = (update.message.text or "").strip()
+
     if text in ("/start", "start"):
         return await h_start.start(update, context)
 
-    # 通用：用户直接输入“取消/退出/cancel”也能取消任何输入流程
+    # 通用取消
     if text in ("取消", "cancel", "退出"):
         h_common.clear_user_flow_flags(context)
         return await h_start.start(update, context)
 
-    # 主菜单入口（兼容老文案）
+    # 主菜单入口
     if text.startswith("💰 我的钱包") or text.startswith("一、我的钱包"):
         return await h_wallet.show_wallet(update, context)
     if text.startswith("💱 汇率查询") or text.startswith("二、汇率查询"):
@@ -170,15 +169,17 @@ async def on_text_router(update, context):
         return await h_addrquery.addr_query(update, context)
     if text.startswith("🆘 联系客服") or text.startswith("四、联系客服"):
         return await h_support.show_support(update, context)
-    if text.startswith("🔐 设置密码") or text.startswith("五、设置密码"):
+    if text.startswith("🔐 设置密码") or text.startswith("五、设置密码") or text.startswith("🔐 密码管理"):
         return await h_password.set_password(update, context)
 
-    # 钱包子菜单（兼容老文案）
+    # 钱包子菜单
     if text.startswith("🧧 红包") or text.startswith("1、红包"):
         return await h_rp.show_red_packets(update, context)
     if text.startswith("➕ 充值") or text.startswith("2、充值"):
         return await h_recharge.show_recharge(update, context)
-    if text.startswith("💸 提现") or text.startswith("3、提现"):
+    # 兼容“提现/提款”
+    if (text.startswith("💸 提现") or text.startswith("💸 提款")
+        or text.startswith("3、提现") or text.startswith("3、提款")):
         return await h_withdraw.show_withdraw(update, context)
     if text.startswith("📒 资金明细") or text.startswith("4、资金明细"):
         return await h_ledger.show_ledger(update, context)
@@ -186,10 +187,8 @@ async def on_text_router(update, context):
         return await h_addrbook.address_entry(update, context)
     if text.startswith("⬅️ 返回主菜单") or text.startswith("返回主菜单"):
         return await h_start.start(update, context)
-    if text.startswith("🔐 密码管理"):
-        return await h_password.set_password(update, context)
 
-    # 其他输入流（只路由到需要的 on_text）
+    # 其他输入流
     await h_rp.on_user_text(update, context)
     await h_password.on_text(update, context)
     await h_addrquery.on_text(update, context)

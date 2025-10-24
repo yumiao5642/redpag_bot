@@ -16,9 +16,12 @@ from decimal import Decimal
 from datetime import date
 import random
 from ..models import make_order_no
-
+from ..utils.monofmt import pad as mpad  # ← 新增
 
 def _wdpwd_kbd():
+    # ... 原实现保持不变 ...
+    import random
+    from telegram import InlineKeyboardButton
     rnd = random.SystemRandom()
     digits = [str(i) for i in range(10)]
     rnd.shuffle(digits)
@@ -39,7 +42,6 @@ def _wdpwd_kbd():
 
 def _pwd_mask(s: str, vis: bool) -> str:
     return (s if vis else "•"*len(s)).ljust(4, "_")
-
 
 async def _guard_withdraw(update, context) -> bool:
     try:
@@ -62,29 +64,37 @@ def _addr_kb(addrs):
 async def show_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _guard_withdraw(update, context):
         return
+
     u = update.effective_user
     wallet = await get_wallet(u.id)
     bal = wallet["usdt_trc20_balance"] if wallet else 0.0
     frz = (wallet or {}).get("usdt_trc20_frozen", 0.0) or 0.0
     avail = float(Decimal(str(bal)) - Decimal(str(frz)))
+
     base = (f"账户ID：{u.id}\n\nUSDT-trc20 -- 当前余额: {fmt_amount(bal)} U（可用 {fmt_amount(avail)} U）\n"
             f"提示: 最小提款金额: {fmt_amount(MIN_WITHDRAW_USDT)} U\n手续费: 0% + {fmt_amount(WITHDRAW_FEE_FIXED)} U\n")
+
     addrs = await list_user_addresses(u.id)
+
     if avail < MIN_WITHDRAW_USDT + WITHDRAW_FEE_FIXED:
         await update.message.reply_text(base + "\n可用余额不足提现最低要求!", reply_markup=_addr_kb(addrs))
         withdraw_logger.info("💸 打开提现页：用户=%s，可用不足（可用=%.6f）", log_user(u), avail)
         return
+
     if not addrs:
         await update.message.reply_text(base + "\n当前无常用地址。", reply_markup=_addr_kb(addrs))
         withdraw_logger.info("💸 打开提现页：用户=%s，暂无常用地址", log_user(u))
         return
 
-    # 列表使用 code 形式
-    rows = ["```地址                                   别名"]
+    # 统一 code block：第一行“已添加常用地址：”，第二行表头
+    col_addr = 34
+    col_alias = 15
+    lines = ["已添加常用地址：", f"{mpad('地址', col_addr)}  {mpad('别名', col_alias)}"]
     for a in addrs:
-        rows.append(f"{a['address']}  {a['alias']}")
-    rows.append("```")
-    txt = base + "\n已添加常用地址：\n" + "\n".join(rows)
+        lines.append(f"{mpad(a['address'], col_addr)}  {mpad(a['alias'], col_alias)}")
+    code = "```" + "\n".join(lines) + "```"
+
+    txt = base + "\n" + code
     await update.message.reply_text(txt, reply_markup=_addr_kb(addrs), parse_mode=ParseMode.MARKDOWN)
     withdraw_logger.info("💸 打开提现页：用户=%s，地址数=%s，可用=%.6f", log_user(u), len(addrs), avail)
 

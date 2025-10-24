@@ -1,18 +1,12 @@
 from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# 主菜单：移除“设置密码/修改密码”
+
+# 主菜单：两行 → 我的钱包｜汇率查询； 联系客服｜地址查询
 MAIN_MENU = ReplyKeyboardMarkup([
-    [KeyboardButton("💰 我的钱包")],[KeyboardButton("🆘 联系客服")],
-    [KeyboardButton("💱 汇率查询"), KeyboardButton("🧭 地址查询")],
+    [KeyboardButton("💰 我的钱包"), KeyboardButton("💱 汇率查询")],
+    [KeyboardButton("🆘 联系客服"), KeyboardButton("🧭 地址查询")],
 ], resize_keyboard=True)
 
-# 钱包子菜单：第1行（充值｜提款），第2行（红包｜资金明细），第3行（常用地址｜密码管理）
-WALLET_MENU = ReplyKeyboardMarkup([
-    [KeyboardButton("➕ 充值"), KeyboardButton("💸 提现")],
-    [KeyboardButton("🧧 红包"), KeyboardButton("📒 资金明细")],
-    [KeyboardButton("📎 常用地址"), KeyboardButton("🔐 密码管理")],
-    [KeyboardButton("⬅️ 返回主菜单")]
-], resize_keyboard=True)
 
 def _type_row(rp_id: int, rp_type: str):
     def _btn(t, label):
@@ -23,6 +17,15 @@ def _type_row(rp_id: int, rp_type: str):
         _btn("average", "平均"),
         _btn("exclusive", "专属"),
     ]
+
+# 钱包子菜单：三行 → 红包｜资金明细； 充值｜提款； 常用地址｜密码管理
+WALLET_MENU = ReplyKeyboardMarkup([
+    [KeyboardButton("🧧 红包"), KeyboardButton("📒 资金明细")],
+    [KeyboardButton("➕ 充值"), KeyboardButton("💸 提款")],
+    [KeyboardButton("📎 常用地址"), KeyboardButton("🔐 密码管理")],
+    [KeyboardButton("⬅️ 返回主菜单")]
+], resize_keyboard=True)
+
 
 def redpacket_create_menu(rp_id: int, rp_type: str):
     if rp_type in ("random", "average"):
@@ -45,7 +48,6 @@ def redpacket_draft_menu(rp_type: str):
     def _type_btn(t, label):
         hand = "👉 " if t == rp_type else ""
         return InlineKeyboardButton(f"{hand}{label}", callback_data=f"rpd_type:{t}")
-
     if rp_type in ("random", "average"):
         row1 = [
             InlineKeyboardButton("设置红包数量", callback_data="rpd_set_count"),
