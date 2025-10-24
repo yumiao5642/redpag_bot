@@ -1,24 +1,18 @@
 from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
+# 主菜单：移除“设置密码/修改密码”
 MAIN_MENU = ReplyKeyboardMarkup([
-    [KeyboardButton("💰 我的钱包")],
+    [KeyboardButton("💰 我的钱包")],[KeyboardButton("🆘 联系客服")],
     [KeyboardButton("💱 汇率查询"), KeyboardButton("🧭 地址查询")],
-    [KeyboardButton("🆘 联系客服"), KeyboardButton("🔐 设置密码/修改密码")]
 ], resize_keyboard=True)
 
+# 钱包子菜单：第1行（充值｜提款），第2行（红包｜资金明细），第3行（常用地址｜密码管理）
 WALLET_MENU = ReplyKeyboardMarkup([
-    [KeyboardButton("🧧 红包"), KeyboardButton("➕ 充值")],
-    [KeyboardButton("💸 提现"), KeyboardButton("📒 资金明细")],
-    [KeyboardButton("📎 常用地址")],
+    [KeyboardButton("➕ 充值"), KeyboardButton("💸 提现")],
+    [KeyboardButton("🧧 红包"), KeyboardButton("📒 资金明细")],
+    [KeyboardButton("📎 常用地址"), KeyboardButton("🔐 密码管理")],
     [KeyboardButton("⬅️ 返回主菜单")]
 ], resize_keyboard=True)
-
-def redpacket_inline_menu(rp_id: int):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🧧 立即领取", callback_data=f"rp_claim:{rp_id}")
-    ],[
-        InlineKeyboardButton("查看详情", callback_data=f"rp_detail:{rp_id}")
-    ]])
 
 def _type_row(rp_id: int, rp_type: str):
     def _btn(t, label):

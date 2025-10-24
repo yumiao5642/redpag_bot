@@ -75,3 +75,40 @@ async def cancel_any_input(update, context: ContextTypes.DEFAULT_TYPE):
         pass
     from .common import show_main_menu
     await show_main_menu(q.message.chat_id, context)
+
+async def safe_reply(update, context, text: str, **kwargs):
+    """优先用传入的 parse_mode 发送；若 Markdown 解析失败，降级为纯文本再发一次。"""
+    try:
+        return await update.message.reply_text(text, **kwargs)
+    except BadRequest as e:
+        if "parse entities" in str(e).lower() or "can" in str(e).lower():
+            kwargs.pop("parse_mode", None)
+            return await update.message.reply_text(text, **kwargs)
+        raise
+
+async def gc_track(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, tag: str):
+    bag = context.chat_data.setdefault("_gc", {})
+    bag.setdefault(tag, set()).add(message_id)
+
+async def gc_delete(context: ContextTypes.DEFAULT_TYPE, chat_id: int, tag: str):
+    bag = context.chat_data.get("_gc", {})
+    ids = list(bag.pop(tag, set()))
+    for mid in ids:
+        try:
+            await context.bot.delete_message(chat_id, mid)
+        except Exception:
+            # 删除失败忽略（可能用户已删除或过期）
+            pass
+
+async def autoclean_on_new_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    在进入新的操作（文本/菜单/指令等）前，自动清理默认临时 UI：
+      - pwd    ：交易密码键盘
+      - rppwd  ：红包支付密码键盘
+      - wdpwd  ：提现密码键盘
+    """
+    if not update.effective_chat:
+        return
+    chat_id = update.effective_chat.id
+    for tag in ("pwd", "rppwd", "wdpwd"):
+        await gc_delete(context, chat_id, tag)

@@ -5,17 +5,23 @@ from ..models import add_user_address, list_user_addresses
 from ..services.tron import is_valid_address
 from ..logger import address_logger
 from .common import show_main_menu
-from ..utils.logfmt import log_user  # 顶部新增
+from ..utils.logfmt import log_user  # 顶部已有
+from telegram.constants import ParseMode
+
 
 ALIA_MAX = 15
 
 def _list_text(rows):
     if not rows:
         return "当前无常用地址。"
-    lines = ["常用地址列表："]
+    lines = ["```地址                                   别名"]
     for r in rows:
-        lines.append(f"- {r['address']}  {r['alias']}")
+        addr = (r['address'] or '').strip()
+        alias = (r['alias'] or '').strip()
+        lines.append(f"{addr}  {alias}")
+    lines.append("```")
     return "\n".join(lines)
+
 
 def _kb():
     return InlineKeyboardMarkup([
@@ -25,7 +31,8 @@ def _kb():
 
 async def address_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = await list_user_addresses(update.effective_user.id)
-    await update.message.reply_text(_list_text(rows), reply_markup=_kb())
+    await update.message.reply_text(_list_text(rows), reply_markup=_kb(), parse_mode=ParseMode.MARKDOWN)
+
 
 async def address_kb_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from .common import cancel_kb

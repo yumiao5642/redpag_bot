@@ -1,16 +1,22 @@
 import asyncio
+import json
+import httpx
+import re
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler,
+    filters, TypeHandler, ChosenInlineResultHandler   # ← 新增 ChosenInlineResultHandler
 )
 from telegram import BotCommand, BotCommandScopeDefault, Update
 from telegram.request import HTTPXRequest
 from .config import (
     BOT_TOKEN,
     TELEGRAM_CONNECT_TIMEOUT, TELEGRAM_READ_TIMEOUT, TELEGRAM_WRITE_TIMEOUT, TELEGRAM_POOL_TIMEOUT, TELEGRAM_PROXY,
-    USDT_CONTRACT, AGGREGATE_ADDRESS
+    USDT_CONTRACT, AGGREGATE_ADDRESS,
+    WEBHOOK_MODE, WEBHOOK_HOST, WEBHOOK_PORT, WEBHOOK_URL_PATH, WEBHOOK_URL_FULL, WEBHOOK_SECRET, ALLOWED_UPDATES
 )
-from .db import init_pool, close_pool
 
+from .db import init_pool, close_pool
+from datetime import datetime
 from .handlers import start as h_start
 from .handlers import wallet as h_wallet
 from .handlers import red_packet as h_rp
@@ -26,6 +32,106 @@ from .handlers import common as h_common
 from .logger import app_logger
 
 import asyncio, sys
+
+
+def _mask(s: str, keep_tail: int = 4) -> str:
+    if not s:
+        return ""
+    tail = s[-keep_tail:] if len(s) >= keep_tail else s
+    return f"<len={len(s)}>***{tail}"
+
+async def _probe_url(url: str) -> dict:
+    """启动时探测一下公网 URL（GET 一下，Webhook 端口返回 405 也算正常）"""
+    out = {"ok": False, "status": None, "detail": ""}
+    try:
+        timeout = httpx.Timeout(10.0, connect=10.0, read=10.0)
+        async with httpx.AsyncClient(timeout=timeout, verify=True) as client:
+            r = await client.get(url)
+            out["status"] = r.status_code
+            out["ok"] = True
+            out["detail"] = (r.text or "")[:200]
+    except Exception as e:
+        out["detail"] = str(e)
+    return out
+
+# 1) 文件顶部已有 from datetime import datetime
+
+def _json_default(o):
+    if isinstance(o, datetime):
+        return o.isoformat()
+    try:
+        return str(o)
+    except Exception:
+        return "<non-serializable>"
+
+async def _log_startup_config(app):
+    me = await app.bot.get_me()
+    wh = await app.bot.get_webhook_info()
+    probe = await _probe_url(WEBHOOK_URL_FULL) if (WEBHOOK_MODE == "webhook" and WEBHOOK_URL_FULL.startswith("https://")) else {"ok": False}
+
+    cfg = {
+        "mode": WEBHOOK_MODE,
+        "bot": {"id": me.id, "username": f"@{me.username}"},
+        "webhook_local": {"listen": f"{WEBHOOK_HOST}:{WEBHOOK_PORT}", "url_path": f"/{WEBHOOK_URL_PATH}"},
+        "webhook_public": {
+            "full_url": WEBHOOK_URL_FULL,
+            "secret_token_tail": WEBHOOK_SECRET[-4:] if WEBHOOK_SECRET else "",
+            "secret_len": len(WEBHOOK_SECRET or ""),
+        },
+        "telegram_webhook_info": {
+            "url": wh.url,
+            "has_cert": wh.has_custom_certificate,
+            "pending": wh.pending_update_count,
+            "ip_address": getattr(wh, "ip_address", None),
+            "allowed_updates": wh.allowed_updates,
+            "last_error_date": (getattr(wh, "last_error_date", None).isoformat()
+                                if isinstance(getattr(wh, "last_error_date", None), datetime)
+                                else getattr(wh, "last_error_date", None)),
+            "last_error_message": getattr(wh, "last_error_message", None),
+            "max_connections": getattr(wh, "max_connections", None),
+        },
+        "allowed_updates_local": ALLOWED_UPDATES,
+        "timeouts": {
+            "connect": TELEGRAM_CONNECT_TIMEOUT,
+            "read": TELEGRAM_READ_TIMEOUT,
+            "write": TELEGRAM_WRITE_TIMEOUT,
+            "pool": TELEGRAM_POOL_TIMEOUT,
+        },
+        "proxy": TELEGRAM_PROXY or "",
+        "token_masked": _mask(BOT_TOKEN),
+        "aggregate_addr": AGGREGATE_ADDRESS,
+        "usdt_contract_hint": (USDT_CONTRACT[:6] + "..." + USDT_CONTRACT[-6:]) if USDT_CONTRACT else "",
+        "public_url_probe": probe,
+    }
+
+    mismatch = (WEBHOOK_MODE == "webhook" and (wh.url or "") != WEBHOOK_URL_FULL)
+    if mismatch:
+        app_logger.error("❌ Webhook URL 不一致：Telegram=%s  Local=%s", wh.url, WEBHOOK_URL_FULL)
+    if WEBHOOK_MODE == "webhook" and probe and isinstance(probe.get("status"), int) and probe["status"] == 404:
+        app_logger.error("❌ 公网 URL 探测返回 404：Cloudflare/反向代理未转发到 /%s（或路径被改写）", WEBHOOK_URL_PATH)
+
+    app_logger.info("🔧 Startup config dump:\n%s", json.dumps(cfg, ensure_ascii=False, indent=2, default=_json_default))
+
+# 便捷健康检查命令
+async def ping(update, context):
+    await update.message.reply_text("pong")
+
+async def diag(update, context):
+    wh = await context.bot.get_webhook_info()
+    txt = [
+        f"mode = {WEBHOOK_MODE}",
+        f"listen = {WEBHOOK_HOST}:{WEBHOOK_PORT}",
+        f"url_path = /{WEBHOOK_URL_PATH}",
+        f"public = {WEBHOOK_URL_FULL}",
+        f"wh.url = {wh.url}",
+        f"allowed_updates(local) = {ALLOWED_UPDATES}",
+        f"allowed_updates(tg) = {wh.allowed_updates}",
+        f"last_error = {getattr(wh, 'last_error_message', None)}",
+        f"pending = {wh.pending_update_count}",
+        f"secret.len = {len(WEBHOOK_SECRET or '')}",
+    ]
+    await update.message.reply_text("\n".join(txt))
+
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -33,8 +139,19 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+async def _tap(update: Update, context):
+    try:
+        app_logger.info("⬅️ incoming update keys: %s", list(update.to_dict().keys()))
+    except Exception:
+        pass
+
+async def on_error(update, context):
+    app_logger.exception("🔥 Handler error: %s | update=%s", context.error, getattr(update, "to_dict", lambda: update)())
+
 
 async def on_text_router(update, context):
+    await h_common.autoclean_on_new_action(update, context)
+
     text = (update.message.text or "").strip()
     if text in ("/start", "start"):
         return await h_start.start(update, context)
@@ -69,6 +186,8 @@ async def on_text_router(update, context):
         return await h_addrbook.address_entry(update, context)
     if text.startswith("⬅️ 返回主菜单") or text.startswith("返回主菜单"):
         return await h_start.start(update, context)
+    if text.startswith("🔐 密码管理"):
+        return await h_password.set_password(update, context)
 
     # 其他输入流（只路由到需要的 on_text）
     await h_rp.on_user_text(update, context)
@@ -103,28 +222,30 @@ async def _startup(app):
         ],
         scope=BotCommandScopeDefault(),
     )
+    await _log_startup_config(app)
     app_logger.info("🚀 机器人已启动，等待消息...")
 
 async def _shutdown(app):
     await close_pool()
     app_logger.info("🛑 机器人已关闭。")
 
+def build_app():
+    req_kwargs = {
+        "connect_timeout": TELEGRAM_CONNECT_TIMEOUT,
+        "read_timeout": TELEGRAM_READ_TIMEOUT,
+        "write_timeout": TELEGRAM_WRITE_TIMEOUT,
+        "pool_timeout": TELEGRAM_POOL_TIMEOUT,
+    }
+    if TELEGRAM_PROXY:
+        req_kwargs["proxy_url"] = TELEGRAM_PROXY
+    request = HTTPXRequest(**req_kwargs)
 
-def main():
-    # 扩大 Telegram 请求超时 + 可选代理，解决 get_me 启动超时
-    req = HTTPXRequest(
-        read_timeout=TELEGRAM_READ_TIMEOUT,
-        write_timeout=TELEGRAM_WRITE_TIMEOUT,
-        connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
-        pool_timeout=TELEGRAM_POOL_TIMEOUT,
-        proxy=TELEGRAM_PROXY or None,
-    )
+    app = ApplicationBuilder().token(BOT_TOKEN).request(request).build()
 
-    app = ApplicationBuilder()\
-        .token(BOT_TOKEN)\
-        .concurrent_updates(True)\
-        .request(req)\
-        .build()
+    # 诊断命令
+    app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("diag", diag))
+    # ……这里保留你现有的 handler 注册……
     # Commands
     app.add_handler(CommandHandler("start", h_start.start))
     app.add_handler(CommandHandler("wallet", h_wallet.show_wallet))
@@ -136,27 +257,53 @@ def main():
     app.add_handler(CommandHandler("password", h_password.set_password))
 
     # CallbackQuery：红包 / 充值 / 提现 / 密码键盘 / 常用地址回调
-    app.add_handler(CallbackQueryHandler(h_rp.rp_callback, pattern=r"^rp_"))
-    app.add_handler(CallbackQueryHandler(h_rp.rppwd_callback, pattern=r"^rppwd:"))  # ← 新增：红包支付数字键盘
+    app.add_handler(CallbackQueryHandler(h_rp.rp_callback, pattern=r"^(rp_|rpd_)"))
+    app.add_handler(CallbackQueryHandler(h_rp.rppwd_callback, pattern=r"^rppwd:"))
     app.add_handler(CallbackQueryHandler(h_recharge.recharge_callback, pattern=r"^recharge_"))
     app.add_handler(CallbackQueryHandler(h_withdraw.withdraw_callback, pattern=r"^withdraw_"))
     app.add_handler(CallbackQueryHandler(h_password.password_kb_callback, pattern=r"^pwd:"))
     app.add_handler(CallbackQueryHandler(h_addrbook.address_kb_callback, pattern=r"^addrbook"))
+
+    # Inline Query（红包预览卡片）
     app.add_handler(InlineQueryHandler(h_rp.inlinequery_handle))
+    # Chosen Inline Result（用户真正把卡片发送出去）
+    app.add_handler(ChosenInlineResultHandler(h_rp.on_chosen_inline_result))
 
     # 普通文本路由
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_router))
     app.add_handler(CallbackQueryHandler(h_withdraw.wdpwd_callback, pattern=r"^wdpwd:"))
     app.add_handler(CallbackQueryHandler(h_common.cancel_any_input, pattern=r"^cancel"))
 
+    # 在 main() 里、所有 handler 加完后追加：
+    app.add_error_handler(on_error)
+    app.add_handler(TypeHandler(Update, _tap), group=999)
+
+    # 生命周期钩子
+    app_logger.info("Allowed updates = %s", ALLOWED_UPDATES)
     app.post_init = _startup
     app.post_shutdown = _shutdown
+    return app
 
-    try:
-        app.run_polling(close_loop=False, allowed_updates=Update.ALL_TYPES)
-    except Exception as e:
-        app_logger.exception("❌ 机器人启动失败：%s", e)
-        raise
+def main():
+    app = build_app()
+
+    if WEBHOOK_MODE == "polling":
+        app_logger.info("🟡 RUN POLLING mode")
+        app.run_polling(allowed_updates=ALLOWED_UPDATES, drop_pending_updates=False)
+        return
+    app_logger.info("🟢 RUN WEBHOOK mode: listen=%s:%s path=/%s url=%s",
+                      WEBHOOK_HOST, WEBHOOK_PORT, WEBHOOK_URL_PATH, WEBHOOK_URL_FULL)
+    # === Webhook 模式：url_path 必须与 setWebhook 的 path 完全一致 ===
+    app.run_webhook(
+        listen=WEBHOOK_HOST,
+        port=WEBHOOK_PORT,
+        url_path=WEBHOOK_URL_PATH,         # ← 不带前导斜杠
+        webhook_url=WEBHOOK_URL_FULL,      # ← 例如 https://rpapi.../rptg/webhook
+        secret_token=(WEBHOOK_SECRET or None),
+        allowed_updates=ALLOWED_UPDATES,
+        drop_pending_updates=False,
+    )
+
 
 if __name__ == "__main__":
     main()

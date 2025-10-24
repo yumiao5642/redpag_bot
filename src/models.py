@@ -234,6 +234,19 @@ async def get_user_address_by_alias(user_id: int, alias: str) -> Optional[Dict[s
     )
 
 # ===== 红包 =====
+async def get_red_packet_mvp(rp_id: int) -> Optional[Dict[str, Any]]:
+    return await fetchone(
+        "SELECT s.amount, s.claimed_by, s.claimed_at, u.display_name, u.username, u.first_name, u.last_name "
+        "FROM red_packet_shares s "
+        "LEFT JOIN users u ON u.id=s.claimed_by "
+        "WHERE s.red_packet_id=%s AND s.claimed_by IS NOT NULL "
+        "ORDER BY s.amount DESC, s.claimed_at ASC LIMIT 1",
+        (rp_id,)
+    )
+
+async def get_red_packet_by_no(rp_no: str) -> Optional[Dict[str, Any]]:
+    return await fetchone("SELECT * FROM red_packets WHERE rp_no=%s", (rp_no,))
+
 def make_rp_no(dt: Optional[datetime] = None) -> str:
     """red_YYYYMMDDHHMM + 4位随机小写字母"""
     dt = dt or datetime.now()
@@ -342,12 +355,6 @@ async def list_recent_claims_with_creator(user_id: int, limit: int = 10) -> List
         (user_id, limit)
     )
 
-# 为了兼容旧的 import，保留占位函数（目前未使用）。
-async def add_red_packet_claim(rp_id: int, claimer_id: int, amount: float):
-    await execute(
-        "INSERT INTO red_packet_claims(red_packet_id, claimer_id, amount, claimed_at) VALUES(%s,%s,%s,NOW())",
-        (rp_id, claimer_id, amount)
-    )
 
 # —— 能量租用记录 —— #
 async def last_energy_rent_seconds_ago(address: str) -> int:
@@ -409,7 +416,8 @@ async def list_expired_red_packets(limit: int = 200) -> List[Dict[str, Any]]:
         (limit,)
     )
 
-sync def claim_share_atomic(rp_id: int, claimer_id: int) -> Optional[tuple]:
+
+async def claim_share_atomic(rp_id: int, claimer_id: int) -> Optional[tuple]:
     """
     原子领取：抢到一份 → 标记份额 → 入账到钱包 → 记账
     返回 (share_id, amount)；若无可领返回 None
@@ -418,7 +426,6 @@ sync def claim_share_atomic(rp_id: int, claimer_id: int) -> Optional[tuple]:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             try:
                 await conn.begin()
-
                 # 1) 锁定一个未领取份额
                 await cur.execute(
                     "SELECT id, seq, amount FROM red_packet_shares "
@@ -430,7 +437,6 @@ sync def claim_share_atomic(rp_id: int, claimer_id: int) -> Optional[tuple]:
                 if not srow:
                     await conn.rollback()
                     return None
-
                 share_id = int(srow["id"])
                 seq = int(srow["seq"])
                 amt = Decimal(str(srow["amount"]))
@@ -450,12 +456,21 @@ sync def claim_share_atomic(rp_id: int, claimer_id: int) -> Optional[tuple]:
                 rprow = await cur.fetchone()
                 rp_no = rprow["rp_no"] if rprow else f"rp{rp_id}"
 
-                # 4) 入账钱包（加钱）
+                # 4) 入账钱包（加钱）—— 若无钱包记录则插入一行
                 await cur.execute("SELECT usdt_trc20_balance FROM user_wallets WHERE user_id=%s FOR UPDATE", (claimer_id,))
                 w = await cur.fetchone()
                 before = Decimal(str((w or {}).get("usdt_trc20_balance") or 0))
                 after = before + amt
-                await cur.execute("UPDATE user_wallets SET usdt_trc20_balance=%s WHERE user_id=%s", (float(after), claimer_id))
+                if w is None:
+                    await cur.execute(
+                        "INSERT INTO user_wallets(user_id, usdt_trc20_balance, created_at) "
+                        "VALUES(%s,%s,NOW()) "
+                        "ON DUPLICATE KEY UPDATE usdt_trc20_balance=VALUES(usdt_trc20_balance)",
+                        (claimer_id, float(after))
+                    )
+                else:
+                    await cur.execute("UPDATE user_wallets SET usdt_trc20_balance=%s WHERE user_id=%s",
+                                      (float(after), claimer_id))
 
                 # 5) 记账（(user_id, order_no) 唯一）
                 order_no = f"red_claim_{rp_no}_{seq:03d}"

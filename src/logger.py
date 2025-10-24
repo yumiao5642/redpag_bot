@@ -4,6 +4,9 @@ from logging.handlers import RotatingFileHandler
 
 LOG_DIR = os.path.join(os.getcwd(), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+
 
 def _make_handler(filename: str) -> RotatingFileHandler:
     handler = RotatingFileHandler(os.path.join(LOG_DIR, filename), maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
@@ -14,7 +17,7 @@ def _make_handler(filename: str) -> RotatingFileHandler:
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
-        logger.setLevel(logging.INFO)
+        logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
         sh = logging.StreamHandler()
         sh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
         logger.addHandler(sh)
@@ -30,6 +33,9 @@ def get_logger(name: str) -> logging.Logger:
         filename = mapping.get(name, "app.log")
         logger.addHandler(_make_handler(filename))
     return logger
+
+logging.getLogger("telegram").setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+logging.getLogger("httpx").setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 
 recharge_logger = get_logger("recharge")
 redpacket_logger = get_logger("redpacket")
